@@ -231,10 +231,12 @@ jobs:
       - name: Ensure src/nr is populated
         run: |
           NR_DIR="mmwave-LENA-oran/src/nr"
-          if [ -z "$(ls -A "$NR_DIR" 2>/dev/null)" ]; then
+             if [ -z "$(ls -A "$NR_DIR" 2>/dev/null)" ]; then
             echo "src/nr is empty. cloning it from GitHub..."
             rm -rf "$NR_DIR"
-            git clone https://github.com/MinaYonan123/ns3-oran-lena-nr.git "$NR_DIR"
+            git clone https://github.com/MinaYonan123/ns3-oran-lena-nr.git mmwave-LENA-oran/src/ns3-oran-lena-nr
+            mv mmwave-LENA-oran/src/ns3-oran-lena-nr "$NR_DIR"
+            echo "Renamed ns3-oran-lena-nr -> nr"
           else
             echo "src/nr already populated – skipping clone."
           fi
