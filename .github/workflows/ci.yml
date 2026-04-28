@@ -306,14 +306,24 @@ jobs:
 
     steps:
 
-      # 1️⃣  Check out with submodules so ns-3-mmwave-oran/ is populated.
-      #     (e2sim-kpmv3/ will be overwritten by the artifact download below.)
-      - name: Checkout repository with submodules
+      # 1️⃣  Check out the repo.  Submodule init is handled explicitly below.
+      - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          submodules: recursive
 
-      # 2️⃣  Install system build tools that waf and the C++ compiler need.
+      # 2️⃣  Explicitly initialise and clone only the ns-3-mmwave-oran submodule.
+      #     Using actions/checkout with submodules:recursive can silently leave
+      #     submodule directories empty (e.g. when a submodule is on a non-default
+      #     branch or the clone times out), which causes "No such file or directory"
+      #     on the working-directory step.  A direct git submodule update --init
+      #     surfaces any error clearly.
+      #     e2sim-kpmv3 is NOT initialised here — it is restored via artifact.
+      - name: Initialise ns-3-mmwave-oran submodule
+        run: |
+          git submodule update --init --recursive -- ns-3-mmwave-oran
+          echo "ns-3-mmwave-oran contents:"
+          ls ns-3-mmwave-oran/
+
+      # 3️⃣  Install system build tools that the C++ compiler need. 
       #     These must be installed on every fresh runner; they cannot be
       #     transferred via artifact.
       - name: Install system build dependencies
