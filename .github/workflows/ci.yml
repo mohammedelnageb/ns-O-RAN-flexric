@@ -310,7 +310,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 2️⃣  Explicitly initialise and clone only the ns-3-mmwave-oran submodule.
+      # 2️⃣  Explicitly initialise and clone only the mmwave-LENA-oran submodule.
       #
       #     WHY two commands?
       #     `actions/checkout` without `submodules: true` only checks out the
@@ -320,15 +320,15 @@ jobs:
       #
       #     `git submodule init` (no path) reads .gitmodules and registers every
       #     submodule in .git/config without cloning anything.
-      #     `git submodule update --recursive -- ns-3-mmwave-oran` then clones
+      #     `git submodule update --recursive -- mmwave-LENA-oran` then clones
       #     only that submodule (leaving e2sim-kpmv3 untouched — it is restored
       #     from the artifact in step 6️⃣).
-      - name: Initialise ns-3-mmwave-oran submodule
+      - name: Initialise mmwave-LENA-oran submodule
         run: |
           git submodule init
-          git submodule update --recursive -- ns-3-mmwave-oran
-          echo "ns-3-mmwave-oran contents:"
-          ls ns-3-mmwave-oran/
+          git submodule update --recursive -- mmwave-LENA-oran
+          echo "mmwave-LENA-oran contents:"
+          ls mmwave-LENA-oran/
 
       # 3️⃣  Install system build tools that the C++ compiler need. 
       #     These must be installed on every fresh runner; they cannot be
@@ -343,7 +343,7 @@ jobs:
             python3-dev python3.8 \
             libconfig-dev libconfig++-dev
 
-      # 3️⃣  GCC-13 is required to link against the FlexRIC libraries (which
+      # 4️⃣  GCC-13 is required to link against the FlexRIC libraries (which
       #     were compiled with gcc-13 in the test-flexric job).
       - name: Install GCC-13 and set as default compiler
         run: |
@@ -351,13 +351,13 @@ jobs:
           sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-13 130
           sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-13 130
 
-      # 4️⃣  Python 3.13 for ns-3's waf build system.
+      # 5️⃣  Set up Python 3.13 for ns-3's waf build system.
       - name: Set up Python 3.13
         uses: actions/setup-python@v5
         with:
           python-version: "3.13"
 
-      # 5️⃣  Download the compiled e2sim tree from the test-e2sim job.
+      # 6️⃣  Download the compiled e2sim tree from the test-e2sim job.
       #     This restores e2sim-kpmv3/ (with its build/ directory) exactly
       #     as it was after build_e2sim.sh ran — no rebuild needed.
       - name: Download e2sim build artifact
@@ -366,7 +366,7 @@ jobs:
           name: e2sim-build
           path: e2sim-kpmv3/
 
-      # 6️⃣  Download the FlexRIC installed-files artifact from test-flexric.
+      # 7️⃣  Download the FlexRIC installed-files artifact from test-flexric.
       #     The tarball's internal paths mirror the absolute install tree
       #     (e.g. ./usr/local/lib/flexric/...).  Extracting it with `-C /`
       #     restores every file to its original system path.
@@ -383,16 +383,16 @@ jobs:
           sudo tar xzf flexric-installed.tar.gz -C /
           sudo ldconfig
 
-      # 7️⃣  Configure ns-3.  waf reads the system for available libraries and
+      # 8️⃣  Configure ns-3.  waf reads the system for available libraries and
       #     generates the build configuration.  A failure here means a missing
       #     dependency or an incompatible FlexRIC / e2sim version.
       - name: Configure ns-3 
-        working-directory: ns-3-mmwave-oran
+        working-directory: mmwave-LENA-oran
         run: ./ns3 configure --disable-python --enable-examples 
 
 
-      # 8️⃣  Compile the full ns-3 mmWave tree.
+      # 9️⃣  Compile the full ns-3 mmWave tree.
       #     A non-zero exit code fails the job and the pipeline.
       - name: Build ns-3 
-        working-directory: ns-3-mmwave-oran
+        working-directory: mmwave-LENA-oran
         run: ./ns3 build
