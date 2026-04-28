@@ -369,12 +369,13 @@ jobs:
       # 7️⃣  Configure ns-3.  waf reads the system for available libraries and
       #     generates the build configuration.  A failure here means a missing
       #     dependency or an incompatible FlexRIC / e2sim version.
-      - name: Configure ns-3 with waf
+      - name: Configure ns-3 
         working-directory: ns-3-mmwave-oran
-        run: ./waf configure
+        run: ./ns3 configure --disable-python --enable-examples 
+
 
       # 8️⃣  Compile the full ns-3 mmWave tree.
       #     A non-zero exit code fails the job and the pipeline.
-      - name: Build ns-3 with waf
+      - name: Build ns-3 
         working-directory: ns-3-mmwave-oran
-        run: ./waf build
+        run: ./ns3 build
