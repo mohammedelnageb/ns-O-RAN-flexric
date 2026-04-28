@@ -243,7 +243,7 @@ jobs:
 
       - name: Patch oran-interface CMakeLists to fix linker deps
         run: |
-          printf '\ncmake_policy(SET CMP0079 NEW)\nif(TARGET ${liboran-interface} AND TARGET ${libmmwave})\n  target_link_libraries(${liboran-interface} PUBLIC ${libmmwave} e2sim)\nendif()\nif(TARGET ${liboran-interface} AND TARGET ${liblte})\n  target_link_libraries(${liblte} PUBLIC ${liboran-interface})\nendif()\n' \
+          printf '\ncmake_policy(SET CMP0079 NEW)\nif(TARGET ns3.42-oran-interface-default AND TARGET ns3.42-mmwave-default)\n  target_link_libraries(ns3.42-oran-interface-default PUBLIC ns3.42-mmwave-default e2sim)\nendif()\nif(TARGET ns3.42-lte-default AND TARGET ns3.42-oran-interface-default)\n  target_link_libraries(ns3.42-lte-default PUBLIC ns3.42-oran-interface-default)\nendif()\n' \
             >> mmwave-LENA-oran/contrib/oran-interface/CMakeLists.txt
 
       - name: Install system build dependencies
