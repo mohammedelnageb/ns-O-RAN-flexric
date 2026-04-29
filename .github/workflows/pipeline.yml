@@ -240,20 +240,22 @@ jobs:
           else
             echo "src/nr already populated – skipping clone."
           fi
+
       - name: Patch oran-interface CMakeLists to fix linker deps
         run: |
-          # Ensure policies allow for linking to targets in different directories
+          # 1. Allow cross-module linking policies
           printf '\ncmake_policy(SET CMP0079 NEW)\n' >> mmwave-LENA-oran/contrib/oran-interface/CMakeLists.txt
           
-          # Link the O-RAN interface to its required dependencies
+          # 2. Link O-RAN interface to e2sim (The base dependency)
           printf 'if(TARGET ns3.42-oran-interface-default)\n  target_link_libraries(ns3.42-oran-interface-default PUBLIC e2sim)\nendif()\n' >> mmwave-LENA-oran/contrib/oran-interface/CMakeLists.txt
           
-          # Link LTE to O-RAN interface (fixes the undefined references in libns3.42-lte-default.so)
+          # 3. Fix LTE module references (The cause of your current error)
+          # This forces libns3.42-lte-default.so to include the O-RAN symbols
           printf 'if(TARGET ns3.42-lte-default AND TARGET ns3.42-oran-interface-default)\n  target_link_libraries(ns3.42-lte-default PUBLIC ns3.42-oran-interface-default)\nendif()\n' >> mmwave-LENA-oran/contrib/oran-interface/CMakeLists.txt
           
-          # Link mmWave to O-RAN interface and e2sim
+          # 4. Fix mmWave module references
           printf 'if(TARGET ns3.42-mmwave-default AND TARGET ns3.42-oran-interface-default)\n  target_link_libraries(ns3.42-mmwave-default PUBLIC ns3.42-oran-interface-default e2sim)\nendif()\n' >> mmwave-LENA-oran/contrib/oran-interface/CMakeLists.txt
-  
+    
       - name: Install system build dependencies
         run: |
           sudo apt-get update
@@ -300,7 +302,7 @@ jobs:
         working-directory: mmwave-LENA-oran
         run: |
          ./ns3 clean
-          rm -rf build 
+          rm -rf cmake-cache build 
          ./ns3 configure --disable-python --enable-examples 
 
       - name: Build ns-3 
