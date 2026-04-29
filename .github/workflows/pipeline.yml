@@ -241,20 +241,20 @@ jobs:
             echo "src/nr already populated – skipping clone."
           fi
 
-      - name: Patch oran-interface CMakeLists to fix linker deps
+      - name: Force link LTE and mmWave to O-RAN interface
         run: |
-          # 1. Allow cross-module linking policies
+          # 1. Patch the LTE module's CMakeLists.txt to depend on the O-RAN interface
+          # This ensures libns3.42-lte-default.so links against the O-RAN symbols
+          sed -i '/LIBRARIES_TO_LINK/a \    ${ns3-oran-interface}' mmwave-LENA-oran/src/lte/CMakeLists.txt
+          
+          # 2. Patch the mmWave module's CMakeLists.txt
+          if [ -f mmwave-LENA-oran/src/mmwave/CMakeLists.txt ]; then
+            sed -i '/LIBRARIES_TO_LINK/a \    ${ns3-oran-interface}' mmwave-LENA-oran/src/mmwave/CMakeLists.txt
+          fi
+
+          # 3. Apply the global policy and link e2sim to the interface
           printf '\ncmake_policy(SET CMP0079 NEW)\n' >> mmwave-LENA-oran/contrib/oran-interface/CMakeLists.txt
-          
-          # 2. Link O-RAN interface to e2sim (The base dependency)
           printf 'if(TARGET ns3.42-oran-interface-default)\n  target_link_libraries(ns3.42-oran-interface-default PUBLIC e2sim)\nendif()\n' >> mmwave-LENA-oran/contrib/oran-interface/CMakeLists.txt
-          
-          # 3. Fix LTE module references (The cause of your current error)
-          # This forces libns3.42-lte-default.so to include the O-RAN symbols
-          printf 'if(TARGET ns3.42-lte-default AND TARGET ns3.42-oran-interface-default)\n  target_link_libraries(ns3.42-lte-default PUBLIC ns3.42-oran-interface-default)\nendif()\n' >> mmwave-LENA-oran/contrib/oran-interface/CMakeLists.txt
-          
-          # 4. Fix mmWave module references
-          printf 'if(TARGET ns3.42-mmwave-default AND TARGET ns3.42-oran-interface-default)\n  target_link_libraries(ns3.42-mmwave-default PUBLIC ns3.42-oran-interface-default e2sim)\nendif()\n' >> mmwave-LENA-oran/contrib/oran-interface/CMakeLists.txt
     
       - name: Install system build dependencies
         run: |
