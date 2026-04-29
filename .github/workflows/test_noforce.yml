@@ -3,7 +3,7 @@
 # Trigger : workflow_dispatch  (triggered manually from the GitHub Actions UI)
 # Runner  : ubuntu-latest (Ubuntu 24.04)
 
-name: ns-O-RAN-flexric CI Pipeline 3
+name: ns-O-RAN-flexric CI Pipeline 4
 
 on:
   workflow_dispatch:
@@ -227,24 +227,6 @@ jobs:
             echo "src/nr already populated – skipping clone."
           fi
 
-      - name: Force link LTE and mmWave to O-RAN interface
-        run: |
-          # 1. Patch LTE CMakeLists
-          # We search for the LIBRARIES_TO_LINK section and append our modules
-          # We include 'nr' because LTE references mmwave::MmWaveBearerStatsCalculator
-          sed -i '/LIBRARIES_TO_LINK/a \    ${ns3-oran-interface}\n    ${ns3-nr}' mmwave-LENA-oran/src/lte/CMakeLists.txt
-          
-          # 2. Patch mmWave (nr) CMakeLists
-          if [ -f mmwave-LENA-oran/src/nr/CMakeLists.txt ]; then
-            sed -i '/LIBRARIES_TO_LINK/a \    ${ns3-oran-interface}' mmwave-LENA-oran/src/nr/CMakeLists.txt
-          fi
-
-          # 3. Apply Global Linker Policy
-          # This allows us to link e2sim (an external lib) directly to an ns-3 module
-          printf '\ncmake_policy(SET CMP0079 NEW)\n' >> mmwave-LENA-oran/contrib/oran-interface/CMakeLists.txt
-          
-          # Find the exact target name for the O-RAN interface and link e2sim to it
-          printf 'if(TARGET ns3.42-oran-interface-default)\n  target_link_libraries(ns3.42-oran-interface-default PUBLIC e2sim)\nendif()\n' >> mmwave-LENA-oran/contrib/oran-interface/CMakeLists.txt
       
       - name: Install system build dependencies
         run: |
