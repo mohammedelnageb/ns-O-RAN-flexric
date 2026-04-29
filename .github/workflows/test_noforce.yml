@@ -214,24 +214,14 @@ jobs:
       - name: Ensure src/nr is populated
         run: |
           NR_DIR="mmwave-LENA-oran/src/nr"
-          
-          if [ ! -d "$NR_DIR" ] || [ -z "$(ls -A "$NR_DIR" 2>/dev/null)" ]; then
-            echo "src/nr is missing or empty – cloning..."
+          if [ ! -f "$NR_DIR/CMakeLists.txt" ]; then
+            echo "src/nr missing CMakeLists.txt – cloning ns3-oran-lena-nr and checking out Lena_oran..."
             rm -rf "$NR_DIR"
-            git clone https://github.com/MinaYonan123/ns3-oran-lena-nr.git "$NR_DIR"
-          fi
-
-          cd "$NR_DIR"
-          git fetch origin
-          
-          echo "Attempting to checkout Lena_oran..."
-          git checkout Lena_oran || git checkout -b Lena_oran origin/Lena_oran
-          
-          if [ -f "CMakeLists.txt" ]; then
-            echo "Successfully populated src/nr and checked out Lena_oran."
+            git clone https://github.com/MinaYonan123/ns3-oran-lena-nr.git mmwave-LENA-oran/src/nr
+            cd mmwave-LENA-oran/src/nr
+            git checkout Lena_oran
           else
-            echo "Error: CMakeLists.txt still missing after checkout!"
-            exit 1
+            echo "src/nr already populated – skipping clone."
           fi
 
       
