@@ -126,17 +126,32 @@ jobs:
           ./ns3 configure 
           ./ns3 build -j$(nproc)
         
-      - name: Run flexRIC
-        working-directory: flexric/build/examples/ric
+      - name: Execution and Integration Test
+        shell: bash
         run: |
-          ./nearRT-RIC
-        
-      - name: Run ns-3 with flexRIC
-        working-directory: mmwave-LENA-oran
-        run: |
-           ./ns3 run scratch/scenario-zero.cc
-     
-      - name: Run kpm_rc xApp
-        working-directory: flexric/build/examples/xapps/kpm_rc
-        run: |
-          ./xapp_kpm_rc
+          # 1. Start the RIC in the background
+          cd flexric/build/examples/ric
+          ./nearRT-RIC & 
+          RIC_PID=$!
+          echo "RIC started with PID $RIC_PID"
+          
+          # 2. Wait for RIC to initialize sockets
+          sleep 10
+          
+         
+          
+          # 4. Run ns-3 in the FOREGROUND
+          # This is the "driver" - when this finishes, the step finishes
+          cd ../../../../../mmwave-LENA-oran
+          ./ns3 run scratch/scenario-zero.cc --stopTime=60s
+          
+           # 3. Start the xApp in the background
+          cd ../xapps/kpm_rc
+          ./xapp_kpm_rc &
+          XAPP_PID=$!
+          echo "xApp started with PID $XAPP_PID"
+            
+
+          # 5. Cleanup: Kill the background processes so the job can exit
+          echo "Simulation finished. Cleaning up..."
+          kill $RIC_PID $XAPP_PID
