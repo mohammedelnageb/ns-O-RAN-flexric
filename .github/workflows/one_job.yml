@@ -149,7 +149,7 @@ jobs:
           # 4. Start the xApp in the background
           # It will now run concurrently with the active ns-3 simulation
           echo "Starting xApp..."
-          $GITHUB_WORKSPACE/flexric/build/examples/xapps/kpm_rc/xapp_kpm_rc &
+          $GITHUB_WORKSPACE/flexric/build/examples/xApps/c/kpm_rc/xapp_kpm_rc &
           XAPP_PID=$!
           
           # 5. THE ANCHOR: Wait for ns-3 to finish its 100s simulation
