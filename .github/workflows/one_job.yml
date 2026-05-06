@@ -129,35 +129,42 @@ jobs:
       - name: Execution and Integration Test
         shell: bash
         run: |
-          # 1. Start the RIC in the background
-          # It needs to be up first to listen for SCTP connections
-          $GITHUB_WORKSPACE/flexric/build/examples/ric/nearRT-RIC & 
+
+          # 1. Start the RIC first — it must be listening before ns-3 connects
+          $GITHUB_WORKSPACE/flexric/build/examples/ric/nearRT-RIC &
           RIC_PID=$!
           echo "RIC started (PID: $RIC_PID)"
-          
-          # 2. Start ns-3 in the background
-          # We launch it and capture its PID so we can wait for it later
+
+          # 2. Start ns-3 — no simTime override; simTime is a GlobalValue with no
+          #    cmd.AddValue() binding, so it cannot be set from the command line.
+          #    Default is 1000 sim-seconds which will outlast our CI window.
           cd $GITHUB_WORKSPACE/mmwave-LENA-oran
-          ./ns3 run scratch/scenario-zero.cc -- --ns3::simTime=100 &
+          ./ns3 run scratch/scenario-zero.cc &
           NS3_PID=$!
           echo "ns-3 E2-Node started (PID: $NS3_PID)"
-          
-          # 3. Brief pause to allow ns-3 to initialize and connect to RIC
+
+          # 3. Wait for ns-3 to initialize and establish the E2 connection to the RIC
           echo "Waiting for E2 connection setup..."
-          sleep 15
-          
-          # 4. Start the xApp in the background
-          # It will now run concurrently with the active ns-3 simulation
+          sleep 20
+
+          # 4. Start the xApp — by now the RIC should have at least one E2 node connected
           echo "Starting xApp..."
           $GITHUB_WORKSPACE/flexric/build/examples/xApp/c/kpm_rc/xapp_kpm_rc &
           XAPP_PID=$!
-          
-          # 5. THE ANCHOR: Wait for ns-3 to finish its 60s simulation
-          # This keeps the step alive. Both RIC and xApp will stay open.
-          echo "Simulation in progress. xApp is monitoring ns-3..."
-          wait $NS3_PID
-          
-          # 6. Cleanup
-          # Once ns-3 finishes, we manually stop the RIC and xApp
-          echo "ns-3 simulation complete. Shutting down RIC and xApp..."
-          kill $RIC_PID $XAPP_PID 2>/dev/null || true
+          echo "xApp started (PID: $XAPP_PID)"
+
+          # 5. Let the integration run for 90 seconds of wall-clock time
+          echo "Integration test window: 90s..."
+          sleep 90
+
+          # 6. Verify all three processes are still alive (crash = test failure)
+          FAILED=0
+          kill -0 $RIC_PID  2>/dev/null || { echo "FAIL: RIC exited unexpectedly";  FAILED=1; }
+          kill -0 $NS3_PID  2>/dev/null || { echo "FAIL: ns-3 exited unexpectedly"; FAILED=1; }
+          kill -0 $XAPP_PID 2>/dev/null || { echo "FAIL: xApp exited unexpectedly"; FAILED=1; }
+
+          # 7. Cleanup
+          echo "Integration test complete. Shutting down all processes..."
+          kill $RIC_PID $NS3_PID $XAPP_PID 2>/dev/null || true
+
+          [ $FAILED -eq 0 ] && echo "All processes ran successfully." || exit 1
