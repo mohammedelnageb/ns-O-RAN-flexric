@@ -242,7 +242,7 @@ jobs:
           echo "RIC started (PID: $RIC_PID)"
 
           cd $GITHUB_WORKSPACE/mmwave-LENA-oran
-          ./ns3 run scratch/scenario-zero.cc > /tmp/ns3.log 2>&1 &
+          ./ns3 run --no-build scratch/scenario-zero.cc > /tmp/ns3.log 2>&1 &
           NS3_PID=$!
           echo "ns-3 E2-Node started (PID: $NS3_PID)"
 
@@ -349,7 +349,7 @@ jobs:
           echo "RIC started (PID: $RIC_PID)"
 
           cd $GITHUB_WORKSPACE/mmwave-LENA-oran
-          ./ns3 run scratch/Energy_saving_with_cell_utilization_scenario.cc > /tmp/ns3.log 2>&1 &
+          ./ns3 run --no-build scratch/Energy_saving_with_cell_utilization_scenario.cc > /tmp/ns3.log 2>&1 &
           NS3_PID=$!
           echo "ns-3 E2-Node started (PID: $NS3_PID)"
 
