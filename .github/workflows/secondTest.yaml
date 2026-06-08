@@ -1,4 +1,4 @@
-name: ns-O-RAN-flexric Pipeline Optimized
+name: ns-O-RAN-flexric Pipeline
 
 on:
   workflow_dispatch:
@@ -12,13 +12,13 @@ jobs:
 
 
 # ============================================================
-# Build E2SIM
+# E2SIM
 # ============================================================
 
   build-e2sim:
 
-    name: Build E2SIM
     runs-on: ubuntu-latest
+    name: Build E2SIM
 
 
     steps:
@@ -30,6 +30,7 @@ jobs:
 
     - name: Install dependencies
       run: |
+        set -e
 
         sudo apt update
 
@@ -45,59 +46,45 @@ jobs:
           flex
 
 
-
     - name: Build E2SIM
-
       working-directory: e2sim-kpmv3/e2sim
-
       run: |
+        set -e
 
         mkdir -p build
 
         sudo ./build_e2sim.sh 3
 
 
-
     - name: Upload E2SIM
-
       uses: actions/upload-artifact@v4
-
       with:
-
         name: e2sim-deb
-
         path: e2sim-kpmv3/e2sim/build/*.deb
 
 
 
 
-
 # ============================================================
-# Build FlexRIC
+# FLEXRIC
 # ============================================================
-
 
   build-flexric:
 
-
-    name: Build FlexRIC
-
     runs-on: ubuntu-latest
+    name: Build FlexRIC
 
 
     steps:
 
-
     - uses: actions/checkout@v4
 
 
-
-    - name: Install dependencies
-
+    - name: Dependencies
       run: |
+        set -e
 
         sudo apt update
-
 
         sudo apt install -y \
           build-essential \
@@ -119,93 +106,68 @@ jobs:
           flex
 
 
-
-
-    - name: Install GCC 13
-
+    - name: GCC 13
       run: |
+        set -e
 
         sudo apt install -y gcc-13 g++-13
 
+        sudo update-alternatives \
+          --install /usr/bin/gcc gcc /usr/bin/gcc-13 130
 
         sudo update-alternatives \
-        --install /usr/bin/gcc gcc /usr/bin/gcc-13 130
+          --install /usr/bin/g++ g++ /usr/bin/g++-13 130
 
 
-        sudo update-alternatives \
-        --install /usr/bin/g++ g++ /usr/bin/g++-13 130
-
-
-
-
-    - name: Install ASN1C
-
+    - name: ASN1C
       run: |
+        set -e
 
-
-        git clone \
-        https://github.com/mouse07410/asn1c \
-        /tmp/asn1c
-
+        git clone https://github.com/mouse07410/asn1c /tmp/asn1c
 
         cd /tmp/asn1c
 
-
         git checkout 940dd5fa9f3917913fd487b13dfddfacd0ded06e
-
 
         autoreconf -iv
 
-
-        ./configure \
-        --prefix=/opt/asn1c
-
+        ./configure --prefix=/opt/asn1c
 
         make -j$(nproc)
 
         sudo make install
-
 
         echo "/opt/asn1c/bin" >> $GITHUB_PATH
 
 
 
-
-
     - name: Clone FlexRIC
-
       run: |
+        set -e
 
-        git clone \
-        https://gitlab.eurecom.fr/mosaic5g/flexric.git
-
+        git clone https://gitlab.eurecom.fr/mosaic5g/flexric.git
 
         cd flexric
-
 
         git checkout d3dc645b4
 
 
 
-
-
     - name: Build FlexRIC
-
       run: |
+        set -e
+
 
         cd flexric
 
-
         mkdir build
-
 
         cd build
 
 
         cmake .. \
-        -DE2AP_VERSION=E2AP_V1 \
-        -DKPM_VERSION=KPM_V3_00
-
+          -DE2AP_VERSION=E2AP_V1 \
+          -DKPM_VERSION=KPM_V3_00
 
 
         make -j$(nproc)
@@ -213,51 +175,39 @@ jobs:
 
         sudo make install
 
-
         sudo ldconfig
 
 
 
-
     - name: Verify KPM headers
-
       run: |
+        set -e
 
         find /usr/local \
         -name "E2SM-KPM-RANfunction-Description.h"
 
 
 
-
     - name: Upload FlexRIC
-
       uses: actions/upload-artifact@v4
-
       with:
-
         name: flexric-build
-
-        path: flexric/
-
+        path: flexric
 
 
 
 
 # ============================================================
-# Build NS3
+# NS3
 # ============================================================
-
 
   build-ns3:
 
-
-    name: Build ns3 ORAN
-
     runs-on: ubuntu-latest
 
+    name: Build ns3
 
     needs:
-
       - build-flexric
       - build-e2sim
 
@@ -266,40 +216,28 @@ jobs:
     steps:
 
 
-
     - uses: actions/checkout@v4
-
       with:
-
         submodules: recursive
 
 
 
-
     - name: Download FlexRIC
-
       uses: actions/download-artifact@v4
-
       with:
-
         name: flexric-build
-
         path: .
 
 
 
-
-
     - name: Install dependencies
-
       run: |
-
+        set -e
 
         sudo apt update
 
 
         sudo apt install -y \
-
           build-essential \
           cmake \
           python3-dev \
@@ -309,12 +247,9 @@ jobs:
 
 
 
-
-
-    - name: Install FlexRIC headers
-
-
+    - name: Install FlexRIC
       run: |
+        set -e
 
 
         cd flexric-build/flexric
@@ -322,83 +257,67 @@ jobs:
 
         sudo cmake --install build
 
-
         sudo ldconfig
 
 
 
-        echo "KPM HEADER CHECK"
-
+        echo "Checking headers"
 
         find /usr/local \
         -name "E2SM-KPM-RANfunction-Description.h"
 
 
 
-
-
-
-    - name: Prepare ORAN interface
+    - name: Prepare ORAN
 
       run: |
+        set -e
 
 
-        ORAN_DIR="mmwave-LENA-oran/contrib/oran-interface"
+        ORAN="mmwave-LENA-oran/contrib/oran-interface"
 
 
-
-        if [ ! -d "$ORAN_DIR/.git" ]
+        if [ ! -d "$ORAN/.git" ]
 
         then
 
-
-          rm -rf $ORAN_DIR
+          rm -rf $ORAN
 
 
           git clone \
           https://github.com/MinaYonan123/oran-interface.git \
-          $ORAN_DIR
-
+          $ORAN
 
         fi
-
-
-
 
 
 
     - name: Prepare NR
 
-
       run: |
+        set -e
 
 
-        NR_DIR="mmwave-LENA-oran/src/nr"
+        NR="mmwave-LENA-oran/src/nr"
 
 
-
-        if [ ! -f "$NR_DIR/CMakeLists.txt" ]
+        if [ ! -f "$NR/CMakeLists.txt" ]
 
         then
 
-
-          rm -rf $NR_DIR
+          rm -rf $NR
 
 
           git clone \
           https://github.com/MinaYonan123/ns3-oran-lena-nr.git \
-          $NR_DIR
+          $NR
 
 
-
-          cd $NR_DIR
-
+          cd $NR
 
           git checkout Lena_oran
 
-
         fi
-
 
 
 
@@ -408,6 +327,7 @@ jobs:
       working-directory: mmwave-LENA-oran
 
       run: |
+        set -e
 
 
         rm -rf cmake-cache
@@ -424,20 +344,16 @@ jobs:
 
 
 
-
     - name: Upload ns3
 
       uses: actions/upload-artifact@v4
-
 
       with:
 
         name: ns3-build
 
-        path:
-
+        path: |
           mmwave-LENA-oran/build
-
           mmwave-LENA-oran/cmake-cache
 
 
@@ -445,24 +361,18 @@ jobs:
 
 
 # ============================================================
-# KPM TEST
+# TESTS PARALLEL
 # ============================================================
 
 
   test-kpm-rc:
 
-
-    name: KPM RC xApp Test
-
     runs-on: ubuntu-latest
 
-
     needs:
-
       - build-e2sim
       - build-flexric
       - build-ns3
-
 
 
     steps:
@@ -472,32 +382,14 @@ jobs:
 
 
     - uses: actions/download-artifact@v4
-
       with:
-
         path: .
 
 
 
-    - name: Install runtime
-
+    - name: Run KPM
       run: |
-
-        sudo apt update
-
-        sudo apt install -y \
-        libsctp-dev \
-        libssl-dev \
-        libboost-all-dev \
-        libconfig-dev
-
-
-
-
-
-    - name: Restore
-
-      run: |
+        set -e
 
 
         sudo dpkg -i e2sim-deb/*.deb || true
@@ -511,16 +403,8 @@ jobs:
 
         sudo cmake --install flexric/build
 
-
         sudo ldconfig
 
-
-
-
-    - name: Run KPM
-
-
-      run: |
 
 
         flexric/build/examples/ric/nearRT-RIC &
@@ -541,26 +425,14 @@ jobs:
 
 
 
-
-# ============================================================
-# ES TEST
-# ============================================================
-
-
   test-es-xapp:
-
-
-    name: ES xApp Test
 
     runs-on: ubuntu-latest
 
-
     needs:
-
       - build-e2sim
       - build-flexric
       - build-ns3
-
 
 
     steps:
@@ -570,16 +442,15 @@ jobs:
 
 
     - uses: actions/download-artifact@v4
-
       with:
-
         path: .
 
 
 
-    - name: Restore
+    - name: Run ES
 
       run: |
+        set -e
 
 
         sudo dpkg -i e2sim-deb/*.deb || true
@@ -593,20 +464,11 @@ jobs:
 
         sudo cmake --install flexric/build
 
-
         sudo ldconfig
 
 
 
-
-    - name: Run ES
-
-
-      run: |
-
-
         flexric/build/examples/ric/nearRT-RIC &
-
 
 
         cd mmwave-LENA-oran
@@ -617,9 +479,7 @@ jobs:
         scratch/Energy_saving_with_cell_utilization_scenario.cc &
 
 
-
         sleep 20
-
 
 
         timeout 30s \
