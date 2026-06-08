@@ -12,25 +12,23 @@ jobs:
 
 
 # ============================================================
-# BUILD E2SIM
+# Build E2SIM
 # ============================================================
 
   build-e2sim:
 
     runs-on: ubuntu-latest
-
     name: Build E2SIM
 
 
     steps:
-
 
     - uses: actions/checkout@v4
       with:
         submodules: recursive
 
 
-    - name: Install deps
+    - name: Install dependencies
       run: |
         set -e
 
@@ -55,10 +53,9 @@ jobs:
       run: |
         set -e
 
-        mkdir build
+        mkdir -p build
 
         sudo ./build_e2sim.sh 3
-
 
 
     - name: Upload E2SIM
@@ -76,11 +73,11 @@ jobs:
 
 
 # ============================================================
-# BUILD FLEXRIC
+# Build FlexRIC
 # ============================================================
 
-
   build-flexric:
+
 
     runs-on: ubuntu-latest
 
@@ -126,7 +123,6 @@ jobs:
 
 
 
-
     - name: Install ASN1C
 
       run: |
@@ -158,6 +154,7 @@ jobs:
 
 
         echo "/opt/asn1c/bin" >> $GITHUB_PATH
+
 
 
 
@@ -214,7 +211,7 @@ jobs:
 
 
 
-    - name: Check headers
+    - name: Verify KPM headers
 
       run: |
         set -e
@@ -233,16 +230,16 @@ jobs:
 
       with:
 
-        name: flexric
+        name: flexric-build
 
-        path: flexric
+        path: flexric/
 
 
 
 
 
 # ============================================================
-# BUILD NS3
+# Build NS3
 # ============================================================
 
 
@@ -261,6 +258,7 @@ jobs:
 
 
 
+
     steps:
 
 
@@ -273,16 +271,24 @@ jobs:
 
 
 
-
     - name: Download FlexRIC
 
       uses: actions/download-artifact@v4
 
       with:
 
-        name: flexric
+        name: flexric-build
 
         path: .
+
+
+
+
+    - name: Show workspace
+
+      run: |
+
+        ls -la
 
 
 
@@ -308,18 +314,19 @@ jobs:
 
 
 
-
-
     - name: Install FlexRIC
 
       run: |
         set -e
 
 
+        echo "Current directory"
+
+        pwd
+
+
         ls -la
 
-
-        cd flexric
 
 
         sudo cmake --install build
@@ -329,7 +336,7 @@ jobs:
 
 
 
-        echo "Checking KPM header"
+        echo "KPM header check"
 
 
         find /usr/local \
@@ -350,7 +357,7 @@ jobs:
 
 
 
-        if [ ! -d "$ORAN/.git" ]
+        if [ ! -f "$ORAN/CMakeLists.txt" ]
 
         then
 
@@ -361,8 +368,8 @@ jobs:
           https://github.com/MinaYonan123/oran-interface.git \
           $ORAN
 
-        fi
 
+        fi
 
 
 
@@ -376,10 +383,10 @@ jobs:
         NR="mmwave-LENA-oran/src/nr"
 
 
+
         if [ ! -f "$NR/CMakeLists.txt" ]
 
         then
-
 
           rm -rf $NR
 
@@ -395,10 +402,7 @@ jobs:
 
           git checkout Lena_oran
 
-
         fi
-
-
 
 
 
@@ -426,7 +430,6 @@ jobs:
 
 
 
-
     - name: Upload ns3
 
       uses: actions/upload-artifact@v4
@@ -434,9 +437,9 @@ jobs:
 
       with:
 
-        name: ns3
+        name: ns3-build
 
-        path:
+        path: |
 
           mmwave-LENA-oran/build
 
@@ -446,8 +449,9 @@ jobs:
 
 
 
+
 # ============================================================
-# TEST KPM
+# KPM TEST
 # ============================================================
 
 
@@ -480,8 +484,7 @@ jobs:
 
 
 
-
-    - name: Run KPM
+    - name: Restore
 
       run: |
         set -e
@@ -490,24 +493,23 @@ jobs:
         sudo dpkg -i e2sim-deb/*.deb || true
 
 
-        cp -r flexric .
-
-
-        cp -r ns3 .
-
-
-        sudo cmake --install flexric/build
+        sudo cmake --install flexric-build
 
 
         sudo ldconfig
 
 
 
-        flexric/build/examples/ric/nearRT-RIC &
+    - name: Run KPM
+
+      run: |
+        set -e
 
 
+        flexric-build/build/examples/ric/nearRT-RIC &
 
-        cd mmwave-LENA-oran
+
+        cd ns3-build/mmwave-LENA-oran
 
 
         ./ns3 run --no-build scratch/scenario-zero.cc &
@@ -516,15 +518,14 @@ jobs:
         sleep 20
 
 
-
-        flexric/build/examples/xApp/c/kpm_rc/xapp_kpm_rc
+        flexric-build/build/examples/xApp/c/kpm_rc/xapp_kpm_rc
 
 
 
 
 
 # ============================================================
-# TEST ES
+# ES TEST
 # ============================================================
 
 
@@ -539,7 +540,6 @@ jobs:
       - build-e2sim
       - build-flexric
       - build-ns3
-
 
 
 
@@ -559,25 +559,16 @@ jobs:
 
 
 
-
-    - name: Run ES
+    - name: Restore
 
       run: |
         set -e
 
 
-
         sudo dpkg -i e2sim-deb/*.deb || true
 
 
-        cp -r flexric .
-
-
-        cp -r ns3 .
-
-
-
-        sudo cmake --install flexric/build
+        sudo cmake --install flexric-build
 
 
         sudo ldconfig
@@ -585,14 +576,17 @@ jobs:
 
 
 
-        flexric/build/examples/ric/nearRT-RIC &
+
+    - name: Run ES
+
+      run: |
+        set -e
 
 
+        flexric-build/build/examples/ric/nearRT-RIC &
 
 
-        cd mmwave-LENA-oran
-
-
+        cd ns3-build/mmwave-LENA-oran
 
 
         ./ns3 run \
@@ -600,11 +594,9 @@ jobs:
         scratch/Energy_saving_with_cell_utilization_scenario.cc &
 
 
-
         sleep 20
 
 
-
         timeout 30s \
-        flexric/build/examples/xApp/c/orange/xapp_es_with_cell_util \
+        flexric-build/build/examples/xApp/c/orange/xapp_es_with_cell_util \
         || true
