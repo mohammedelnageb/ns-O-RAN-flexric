@@ -19,9 +19,9 @@
 #                   │                     │
 #                   │                     │
 #            ┌──────▼──────┐      ┌───────▼─────────┐
-#            │  install-ns3 │      │  test-flexric  │
-#            │  (builds ns-3)│      │  (validates SMs)
-#            └──────┬───────┘      └───────┬─────────┘
+#            │  test-flexric │      │
+#            │  (validates SMs)│      │
+#            └──────┬──────┘      └───────┬─────────┘
 #                   │                     │
 #                   └────────────┬────────┘
 #                                │
@@ -39,8 +39,7 @@
 #   install-flexric builds and installs FlexRIC, then publishes the installed tree.
 # • test-e2sim validates the E2SIM artifact produced by install-e2sim.
 # • test-flexric validates the FlexRIC installed tree produced by install-flexric.
-# • install-ns3 builds ns-3 using those artifacts and publishes the ns-3 build tree.
-# • test-ns3 validates the ns-3 build artifact produced by install-ns3.
+# • test-ns3 validates the ns-3 build artifact produced by the upstream jobs.
 # ─────────────────────────────────────────────────────────────────────────────
 
 name: ns-O-RAN-flexric CI
@@ -343,41 +342,15 @@ jobs:
           fi
           echo "FlexRIC installed artifact is valid."
 
-  # ───────────────────────────────────────────────────────────────────────────
-  # JOB 4 – ns-3 mmWave
-  #
-  # Depends on BOTH upstream install jobs:
-  #   • install-e2sim must pass → its compiled e2sim tree artifact is needed.
-  #   • install-flexric must pass → its installed FlexRIC artifact is needed.
-  #
-  # No FlexRIC or e2sim source builds happen here.  Compiled outputs are
-  # downloaded from the artifacts uploaded by the two upstream jobs and
-  # restored to the correct paths on this fresh runner.
-  # ───────────────────────────────────────────────────────────────────────────
-  install-ns3:
-    name: "Install and Build ns-3 mmWave"
+  test-ns3:
+    name: "ns-3 mmWave – Build and Validate"
     runs-on: ubuntu-latest
     needs: [test-e2sim, test-flexric]
 
     steps:
-
-      # 1️⃣  Check out the repo.  Submodule init is handled explicitly below.
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 2️⃣  Explicitly initialise and clone only the mmwave-LENA-oran submodule.
-      #
-      #     WHY two commands?
-      #     `actions/checkout` without `submodules: true` only checks out the
-      #     working tree.  Submodule paths are listed in .gitmodules but are NOT
-      #     yet registered in .git/config, so `git submodule update -- <path>`
-      #     fails with "pathspec did not match any file(s) known to git".
-      #
-      #     `git submodule init` (no path) reads .gitmodules and registers every
-      #     submodule in .git/config without cloning anything.
-      #     `git submodule update --recursive -- mmwave-LENA-oran` then clones
-      #     only that submodule (leaving e2sim-kpmv3 untouched — it is restored
-      #     from the artifact in step 6️⃣).
       - name: Initialise mmwave-LENA-oran submodule
         run: |
           git submodule init
@@ -425,9 +398,6 @@ jobs:
             printf 'if(TARGET ns3.42-oran-interface-default)\n  target_link_libraries(ns3.42-oran-interface-default PUBLIC e2sim)\nendif()\n' >> "$ORAN_CMAKE"
           fi
 
-      # 3️⃣  Install system build tools that the C++ compiler need.
-      #     These must be installed on every fresh runner; they cannot be
-      #     transferred via artifact.
       - name: Install system build dependencies
         run: |
           sudo apt-get update
@@ -438,22 +408,17 @@ jobs:
             python3-dev python3.8 \
             libconfig-dev libconfig++-dev
 
-      # 4️⃣  GCC-13 is required to link against the FlexRIC libraries.
       - name: Install GCC-13 and set as default compiler
         run: |
           sudo apt-get install -y gcc-13 g++-13
           sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-13 130
           sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-13 130
 
-      # 5️⃣  Set up Python 3.13 for ns-3's waf build system.
       - name: Set up Python 3.13
         uses: actions/setup-python@v5
         with:
           python-version: "3.13"
 
-      # 6️⃣  Download the compiled e2sim tree from the test-e2sim job.
-      #     This restores e2sim-kpmv3/ (with its build/ directory) exactly
-      #     as it was after build_e2sim.sh ran — no rebuild needed.
       - name: Download e2sim build artifact
         uses: actions/download-artifact@v4
         with:
@@ -470,12 +435,6 @@ jobs:
           sudo dpkg --install e2sim-kpmv3/e2sim/build/e2sim-dev_1.0.0_amd64.deb
           sudo ldconfig
 
-      # 7️⃣  Download the FlexRIC installed-files artifact from test-flexric.
-      #     The tarball's internal paths mirror the absolute install tree
-      #     (e.g. ./usr/local/lib/flexric/...).  Extracting it with `-C /`
-      #     restores every file to its original system path.
-      #     `ldconfig` then refreshes the dynamic-linker cache so the SMs
-      #     are immediately discoverable by the linker during waf configure.
       - name: Download FlexRIC installed files artifact
         uses: actions/download-artifact@v4
         with:
@@ -487,45 +446,18 @@ jobs:
           sudo tar xzf flexric-installed.tar.gz -C /
           sudo ldconfig
 
-      # 8️⃣  Configure ns-3.  waf reads the system for available libraries and
-      #     generates the build configuration.  A failure here means a missing
-      #     dependency or an incompatible FlexRIC / e2sim version.
       - name: Configure ns-3
         working-directory: mmwave-LENA-oran
         run: ./ns3 configure --disable-python --enable-examples
 
-      # 9️⃣  Compile the full ns-3 mmWave tree.
-      #     A non-zero exit code fails the job and the pipeline.
       - name: Build ns-3
         working-directory: mmwave-LENA-oran
         run: ./ns3 build
 
-      - name: Upload ns-3 build tree artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ns3-build
-          path: mmwave-LENA-oran/build
-          retention-days: 1
-
-  test-ns3:
-    name: "ns-3 mmWave – Validate Build Artifact"
-    runs-on: ubuntu-latest
-    needs: [install-ns3]
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Download ns-3 build artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: ns3-build
-          path: .
-
-      - name: Validate ns-3 build artifact
+      - name: Validate ns-3 build
         run: |
           if [ ! -d mmwave-LENA-oran/build ]; then
-            echo "ns-3 build artifact missing"
+            echo "ns-3 build directory missing"
             exit 1
           fi
-          echo "ns-3 build artifact is present."
+          echo "ns-3 build is present."
