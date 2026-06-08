@@ -260,16 +260,16 @@ jobs:
           echo "/opt/asn1c/bin" >> "$GITHUB_PATH"
           /opt/asn1c/bin/asn1c -version
 
-      # 6️⃣  Clone from EURECOM GitLab, switch to the `dev` branch, THEN
-      #     hard-reset to the exact pinned commit.  Both steps are needed:
-      #     `git checkout dev` moves the HEAD to the branch; the second
-      #     checkout pins the code to the tested revision.
-      - name: Clone FlexRIC
+      # 6️⃣  Fetch the pinned FlexRIC source snapshot directly from GitLab.
+      #     The archive tarball is more resilient than the git clone endpoint
+      #     when GitLab is responding slowly or returning 502 errors.
+      - name: Fetch FlexRIC source snapshot
         run: |
-          git clone https://gitlab.eurecom.fr/mosaic5g/flexric.git
-          cd flexric
-          git checkout dev
-          git checkout d3dc645b4
+          wget -O /tmp/flexric.tar.gz \
+            https://gitlab.eurecom.fr/mosaic5g/flexric/-/archive/d3dc645b4/flexric-d3dc645b4.tar.gz
+          mkdir flexric
+          tar xzf /tmp/flexric.tar.gz -C flexric --strip-components=1
+          ls -la flexric | head -20
 
       # 7️⃣  Configure with the flags required by ns-O-RAN:
       #       -DE2AP_VERSION=E2AP_V1   → E2AP v1.01
@@ -358,7 +358,6 @@ jobs:
   install-ns3:
     name: "Install and Build ns-3 mmWave"
     runs-on: ubuntu-latest
-    needs: [install-e2sim, install-flexric]
 
     steps:
 
@@ -469,7 +468,7 @@ jobs:
   test-ns3:
     name: "ns-3 mmWave – Validate Build"
     runs-on: ubuntu-latest
-    needs: [install-ns3]
+    needs: [install-ns3, install-deps, install-e2sim, install-flexric]
 
     steps:
       - name: Checkout repository
