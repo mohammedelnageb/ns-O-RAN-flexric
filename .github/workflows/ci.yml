@@ -4,31 +4,43 @@
 # Trigger : workflow_dispatch  (manual – click "Run workflow" in GitHub Actions)
 # Runner  : ubuntu-latest (Ubuntu 24.04)
 #
-# The pipeline has FOUR jobs with the following dependency graph:
+# The pipeline has SEVEN jobs with the following dependency graph:
 #
-#              ┌─────────────────┐
-#              │  install-deps   │  (validates ALL required packages up-front)
-#              └────────┬────────┘
-#                       │  needs: [install-deps]
-#          ┌────────────┴──────────────┐
-#   ┌──────▼───────┐         ┌─────────▼────────┐
-#   │  test-e2sim  │         │  test-flexric    │
-#   └──────┬───────┘         └────────┬─────────┘
-#          │  upload artifact         │  upload artifact
-#          └────────────┬─────────────┘
-#                       │  needs: [test-e2sim, test-flexric]
-#                ┌──────▼──────┐
-#                │  test-ns3   │  (downloads artifacts, no source re-builds)
-#                └─────────────┘
+#          ┌─────────────────┐    ┌──────────────────┐
+#          │  install-deps   │    │  install-e2sim   │
+#          │  (pre-flight)   │    │  (builds E2SIM)  │
+#          └────────┬────────┘    └────────┬─────────┘
+#                   │                     │
+#                   │                     │
+#          ┌────────▼────────┐    ┌───────▼─────────┐
+#          │ install-flexric │    │  test-e2sim     │
+#          │  (builds SMs)   │    │  (validates E2SIM)
+#          └────────┬────────┘    └───────┬─────────┘
+#                   │                     │
+#                   │                     │
+#            ┌──────▼──────┐      ┌───────▼─────────┐
+#            │  install-ns3 │      │  test-flexric  │
+#            │  (builds ns-3)│      │  (validates SMs)
+#            └──────┬───────┘      └───────┬─────────┘
+#                   │                     │
+#                   └────────────┬────────┘
+#                                │
+#                          ┌─────▼─────┐
+#                          │  test-ns3 │
+#                          │  (validates ns-3)
+#                          └───────────┘
 #
 # • install-deps  runs first on its own runner and installs every package
 #   required by all three components.  This acts as a fast pre-flight check:
 #   if any package is unavailable on the target Ubuntu version the pipeline
 #   fails here before spending time on the longer build jobs.
-# • test-e2sim  and test-flexric both gate on install-deps and run in parallel.
-#   Each uploads its compiled/installed outputs as a GitHub Actions artifact.
-# • test-ns3    gates on BOTH build jobs succeeding, then downloads the
-#   artifacts and restores them — avoiding any repeated source builds.
+# • install-e2sim and install-flexric can start in parallel with install-deps.
+#   install-e2sim builds the E2SIM tree and publishes it as an artifact.
+#   install-flexric builds and installs FlexRIC, then publishes the installed tree.
+# • test-e2sim validates the E2SIM artifact produced by install-e2sim.
+# • test-flexric validates the FlexRIC installed tree produced by install-flexric.
+# • install-ns3 builds ns-3 using those artifacts and publishes the ns-3 build tree.
+# • test-ns3 validates the ns-3 build artifact produced by install-ns3.
 # ─────────────────────────────────────────────────────────────────────────────
 
 name: ns-O-RAN-flexric CI
@@ -45,7 +57,7 @@ jobs:
   # Running this as a dedicated first job means:
   #   1. The full dependency list is documented in a single visible step.
   #   2. Package availability on the Ubuntu runner is verified once, up-front.
-  #   3. test-e2sim and test-flexric only start when this gate passes.
+  #   3. install-e2sim and test-flexric may start in parallel with this gate.
   #
   # NOTE: GitHub Actions jobs each run on a fresh virtual machine, so the
   # packages installed here are NOT automatically available in downstream jobs.
@@ -92,24 +104,19 @@ jobs:
           # Installed separately — see https://docs.docker.com/compose/install/
 
   # ───────────────────────────────────────────────────────────────────────────
-  # JOB 1 – E2SIM
-  # Checks out the e2sim-kpmv3 submodule and builds the E2 simulator.
+  # JOB 1 – Install and Build E2SIM
+  # Builds the E2 simulator and uploads the compiled tree as an artifact.
   # ───────────────────────────────────────────────────────────────────────────
-  test-e2sim:
-    name: "E2SIM – Build"
+  install-e2sim:
+    name: "Install and Build E2SIM"
     runs-on: ubuntu-latest
-    needs: [install-deps]  # wait for the pre-flight dependency check
 
     steps:
-
-      # 1️⃣  Check out the repo AND all nested submodules in one go.
-      #     Without `submodules: recursive` the e2sim-kpmv3/ folder stays empty.
       - name: Checkout repository with submodules
         uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      # 2️⃣  Install every library listed in the README for E2SIM.
       - name: Install E2SIM build dependencies
         run: |
           sudo apt-get update
@@ -118,29 +125,19 @@ jobs:
             libsctp-dev autoconf automake libtool \
             bison flex libboost-all-dev g++
 
-      # 3️⃣  The README also lists Python 3.6+ (used by some helper scripts).
-      #     actions/setup-python puts the chosen version first on PATH and
-      #     creates both `python` and `python3` symlinks.
       - name: Set up Python 3.13
         uses: actions/setup-python@v5
         with:
           python-version: "3.13"
 
-      # 4️⃣  The build script expects a `build/` directory to already exist.
       - name: Create build directory
         working-directory: e2sim-kpmv3/e2sim
         run: mkdir -p build
 
-      # 5️⃣  Run the build.  The argument `3` is the number of parallel jobs
-      #     passed to make inside the script.
-      #     A non-zero exit code will automatically fail this step and the job.
       - name: Build E2SIM
         working-directory: e2sim-kpmv3/e2sim
         run: sudo ./build_e2sim.sh 3
 
-      # 6️⃣  Export the compiled e2sim tree so test-ns3 can download it
-      #     instead of re-cloning the submodule and re-running build_e2sim.sh.
-      #     retention-days: 1 keeps storage costs minimal (single-run CI).
       - name: Upload e2sim build artifact
         uses: actions/upload-artifact@v4
         with:
@@ -149,14 +146,40 @@ jobs:
           retention-days: 1
 
   # ───────────────────────────────────────────────────────────────────────────
-  # JOB 2 – FlexRIC
+  # JOB 2 – E2SIM Validation
+  # Downloads the compiled E2SIM artifact and validates that the build tree exists.
+  # ───────────────────────────────────────────────────────────────────────────
+  test-e2sim:
+    name: "E2SIM – Validate Build"
+    runs-on: ubuntu-latest
+    needs: [install-e2sim , install-deps]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download E2SIM build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: e2sim-build
+          path: e2sim-kpmv3/
+
+      - name: Validate E2SIM build artifact
+        run: |
+          if [ ! -d e2sim-kpmv3/e2sim/build ]; then
+            echo "E2SIM build directory missing"
+            exit 1
+          fi
+          echo "E2SIM build artifact is present."
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # JOB 2 – Install and Build FlexRIC
   # Clones FlexRIC from EURECOM GitLab, checks out the pinned commit, builds
   # with the exact CMake flags required by ns-O-RAN, and installs the SMs.
   # ───────────────────────────────────────────────────────────────────────────
-  test-flexric:
-    name: "FlexRIC – Build & Install"
+  install-flexric:
+    name: "Install and Build FlexRIC"
     runs-on: ubuntu-latest
-    needs: [install-deps]  # wait for the pre-flight dependency check
 
     steps:
 
@@ -289,20 +312,53 @@ jobs:
           retention-days: 1
 
   # ───────────────────────────────────────────────────────────────────────────
-  # JOB 3 – ns-3 mmWave
+  # JOB 3 – FlexRIC Validation
+  # Downloads the FlexRIC installed tree artifact and validates it.
+  # ───────────────────────────────────────────────────────────────────────────
+  test-flexric:
+    name: "FlexRIC – Validate Install"
+    runs-on: ubuntu-latest
+    needs: [install-flexric , install-deps]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download FlexRIC installed files artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: flexric-install
+          path: .
+
+      - name: Validate FlexRIC installed artifact
+        run: |
+          if [ ! -f flexric-installed.tar.gz ]; then
+            echo "FlexRIC install artifact missing"
+            exit 1
+          fi
+          mkdir -p /tmp/flexric-validate
+          tar xzf flexric-installed.tar.gz -C /tmp/flexric-validate
+          if [ ! -e /tmp/flexric-validate/usr/local/lib/flexric ]; then
+            echo "FlexRIC installed files missing"
+            exit 1
+          fi
+          echo "FlexRIC installed artifact is valid."
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # JOB 4 – ns-3 mmWave
   #
-  # Depends on BOTH upstream jobs:
-  #   • test-e2sim   must pass → its compiled e2sim tree (artifact) is needed.
-  #   • test-flexric must pass → its installed SM libraries (artifact) are needed.
+  # Depends on BOTH upstream install jobs:
+  #   • install-e2sim must pass → its compiled e2sim tree artifact is needed.
+  #   • install-flexric must pass → its installed FlexRIC artifact is needed.
   #
   # No FlexRIC or e2sim source builds happen here.  Compiled outputs are
   # downloaded from the artifacts uploaded by the two upstream jobs and
   # restored to the correct paths on this fresh runner.
   # ───────────────────────────────────────────────────────────────────────────
-  test-ns3:
-    name: "ns-3 mmWave – Build"
+  install-ns3:
+    name: "Install and Build ns-3 mmWave"
     runs-on: ubuntu-latest
-    needs: [test-e2sim, test-flexric]  # gates on BOTH upstream jobs
+    needs: [install-e2sim, install-flexric]
 
     steps:
 
@@ -344,7 +400,7 @@ jobs:
             libconfig-dev libconfig++-dev
 
       # 4️⃣  GCC-13 is required to link against the FlexRIC libraries (which
-      #     were compiled with gcc-13 in the test-flexric job).
+      #     were compiled with gcc-13 in the install-flexric job).
       - name: Install GCC-13 and set as default compiler
         run: |
           sudo apt-get install -y gcc-13 g++-13
@@ -357,7 +413,7 @@ jobs:
         with:
           python-version: "3.13"
 
-      # 6️⃣  Download the compiled e2sim tree from the test-e2sim job.
+      # 6️⃣  Download the compiled e2sim tree from the install-e2sim job.
       #     This restores e2sim-kpmv3/ (with its build/ directory) exactly
       #     as it was after build_e2sim.sh ran — no rebuild needed.
       - name: Download e2sim build artifact
@@ -366,7 +422,7 @@ jobs:
           name: e2sim-build
           path: e2sim-kpmv3/
 
-      # 7️⃣  Download the FlexRIC installed-files artifact from test-flexric.
+      # 7️⃣  Download the FlexRIC installed-files artifact from install-flexric.
       #     The tarball's internal paths mirror the absolute install tree
       #     (e.g. ./usr/local/lib/flexric/...).  Extracting it with `-C /`
       #     restores every file to its original system path.
@@ -396,3 +452,39 @@ jobs:
       - name: Build ns-3 
         working-directory: mmwave-LENA-oran
         run: ./ns3 build
+
+      # 🔟  Export the compiled ns-3 tree so test-ns3 can download it
+      #     instead of rebuilding on a separate runner.
+      - name: Upload ns-3 build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ns3-build
+          path: mmwave-LENA-oran/
+          retention-days: 1
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # JOB 5 – ns-3 Validation
+  # Downloads the ns-3 build artifact and validates the finished tree.
+  # ───────────────────────────────────────────────────────────────────────────
+  test-ns3:
+    name: "ns-3 mmWave – Validate Build"
+    runs-on: ubuntu-latest
+    needs: [install-ns3]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download ns-3 build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ns3-build
+          path: mmwave-LENA-oran/
+
+      - name: Validate ns-3 build artifact
+        run: |
+          if [ ! -d mmwave-LENA-oran/build ]; then
+            echo "ns-3 build directory missing"
+            exit 1
+          fi
+          echo "ns-3 build artifact is present."
