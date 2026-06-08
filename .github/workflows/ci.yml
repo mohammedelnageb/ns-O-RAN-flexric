@@ -358,7 +358,7 @@ jobs:
   install-ns3:
     name: "Install and Build ns-3 mmWave"
     runs-on: ubuntu-latest
-
+    needs: [install-deps, install-e2sim, install-flexric]
     steps:
 
       # 1️⃣  Check out the repo.  Submodule init is handled explicitly below.
