@@ -181,6 +181,9 @@ jobs:
           sudo tar -czf /tmp/flexric-prefix.tar.gz -C / $MANIFEST
 
           # Combine workspace source/build tree with the prefix snapshot.
+          # flexric-prefix.tar.gz is packed at the archive root (no directory
+          # prefix) so it extracts to $GITHUB_WORKSPACE/flexric-prefix.tar.gz
+          # when the consumer runs: tar -xzf flexric-build.tar.gz -C $GITHUB_WORKSPACE
           tar -czf /tmp/flexric-build.tar.gz \
             -C $GITHUB_WORKSPACE flexric/ \
             -C /tmp              flexric-prefix.tar.gz
@@ -234,16 +237,19 @@ jobs:
 
       - name: Restore FlexRIC workspace + installed prefix
         run: |
-          # 1. Extract the workspace source/build tree.
+          # 1. Extract the full archive to workspace.
+          #    - flexric/*                  → $GITHUB_WORKSPACE/flexric/
+          #    - flexric-prefix.tar.gz      → $GITHUB_WORKSPACE/flexric-prefix.tar.gz
+          #    (the nested tarball is stored at the archive root with no directory
+          #    prefix, so it lands directly in the -C target directory)
           tar -xzf $GITHUB_WORKSPACE/flexric-build.tar.gz \
-            --wildcards 'flexric/*' -C $GITHUB_WORKSPACE
-          # 2. Extract the nested prefix snapshot and restore it to /.
+            -C $GITHUB_WORKSPACE
+
+          # 2. Restore the installed prefix snapshot to /.
           #    This puts /usr/local/include/flexric and /usr/local/lib/libflexric*
           #    back in place, including all asn1c-generated headers that
           #    ns-3's oran-interface needs at compile time.
-          tar -xzf $GITHUB_WORKSPACE/flexric-build.tar.gz \
-            --wildcards 'flexric-prefix.tar.gz' -C /tmp
-          sudo tar -xzf /tmp/flexric-prefix.tar.gz -C /
+          sudo tar -xzf $GITHUB_WORKSPACE/flexric-prefix.tar.gz -C /
           sudo ldconfig
 
       - name: Ensure oran-interface is populated
