@@ -181,8 +181,25 @@ jobs:
         run: |
           echo "Checking for asn1c-generated headers in FlexRIC build..."
           if [ -d "$GITHUB_WORKSPACE/flexric/build" ]; then
-            find $GITHUB_WORKSPACE/flexric/build -maxdepth 1 -name "E2SM*.h" | head -5 || echo "No E2SM headers found at top level"
-            find $GITHUB_WORKSPACE/flexric/build -name "E2SM*.h" | head -5 || echo "No E2SM headers found anywhere"
+            echo "Contents of flexric/build:"
+            ls -lah "$GITHUB_WORKSPACE/flexric/build/" | head -20
+            echo ""
+            echo "Searching for E2SM* headers:"
+            find "$GITHUB_WORKSPACE/flexric/build" -name "E2SM*.h" | head -10 || echo "No E2SM headers found"
+            echo ""
+            echo "Searching for OCTET_STRING headers:"
+            find "$GITHUB_WORKSPACE/flexric/build" -name "OCTET_STRING*" | head -10 || echo "No OCTET_STRING found"
+          fi
+          
+          echo ""
+          echo "Checking asn1c installation:"
+          if [ -d "/opt/asn1c" ]; then
+            echo "Contents of /opt/asn1c:"
+            ls -lah /opt/asn1c/
+            if [ -d "/opt/asn1c/include" ]; then
+              echo "Headers in /opt/asn1c/include (first 20):"
+              ls -1 /opt/asn1c/include/*.h | head -20 || echo "No headers found"
+            fi
           fi
 
       - name: Package FlexRIC artifact
@@ -284,6 +301,10 @@ jobs:
         working-directory: mmwave-LENA-oran
         run: |
           ./ns3 clean
+          # Export asn1c include paths for CMake to find
+          export CXXFLAGS="${CXXFLAGS} -I/opt/asn1c/include"
+          export C_INCLUDE_PATH="/opt/asn1c/include:${C_INCLUDE_PATH}"
+          export CPLUS_INCLUDE_PATH="/opt/asn1c/include:${CPLUS_INCLUDE_PATH}"
           ./ns3 configure
 
       # The compiler resolves #include "E2SM-KPM-RANfunction-Description.h"
@@ -297,25 +318,46 @@ jobs:
           NS3_INC="$GITHUB_WORKSPACE/mmwave-LENA-oran/build/include/ns3"
           mkdir -p "$NS3_INC"
           
-          # Copy asn1c-generated headers from FlexRIC build
+          echo "=== Collecting asn1c headers from all sources ==="
+          
+          # 1. Copy asn1c-generated headers from FlexRIC build (all levels)
+          echo "Searching FlexRIC build directory..."
           if [ -d "$GITHUB_WORKSPACE/flexric/build" ]; then
-            find $GITHUB_WORKSPACE/flexric/build -maxdepth 1 -name "*.h" -type f -exec cp {} "$NS3_INC/" \;
+            find "$GITHUB_WORKSPACE/flexric/build" -name "*.h" -type f | while read hdr; do
+              cp "$hdr" "$NS3_INC/"
+              echo "  Copied: $(basename $hdr)"
+            done
           fi
           
-          # Also check system installed asn1c headers
+          # 2. Copy asn1c runtime headers from system installation
+          echo "Searching /opt/asn1c for runtime headers..."
           if [ -d "/opt/asn1c/include" ]; then
-            cp -f /opt/asn1c/include/*.h "$NS3_INC/" 2>/dev/null || true
+            find /opt/asn1c/include -name "*.h" -type f | while read hdr; do
+              cp "$hdr" "$NS3_INC/"
+              echo "  Copied: $(basename $hdr)"
+            done
           fi
           
-          # Verify critical headers were copied
-          if [ ! -f "$NS3_INC/E2SM-KPM-RANfunction-Description.h" ]; then
-            echo "WARNING: E2SM-KPM-RANfunction-Description.h not found in expected location"
-            echo "Available headers in $NS3_INC:"
-            ls -la "$NS3_INC/" | head -20
-            echo "---"
-            echo "Searching for the file in flexric:"
-            find $GITHUB_WORKSPACE/flexric -name "E2SM-KPM-RANfunction-Description.h" -type f || true
+          # 3. Also check /opt/asn1c/share/asn1c
+          if [ -d "/opt/asn1c/share/asn1c" ]; then
+            find /opt/asn1c/share/asn1c -name "*.h" -type f | while read hdr; do
+              cp "$hdr" "$NS3_INC/"
+              echo "  Copied: $(basename $hdr)"
+            done
           fi
+          
+          echo "=== Verification ==="
+          echo "Total headers in $NS3_INC: $(ls -1 $NS3_INC/*.h 2>/dev/null | wc -l)"
+          
+          # Check for critical headers
+          for HDR in E2SM-KPM-RANfunction-Description.h OCTET_STRING.h BIT_STRING.h; do
+            if [ -f "$NS3_INC/$HDR" ]; then
+              echo "✓ $HDR found"
+            else
+              echo "✗ $HDR NOT FOUND (searching...)"
+              find $GITHUB_WORKSPACE -name "$HDR" -type f 2>/dev/null | head -3 || true
+            fi
+          done
 
       - name: Build ns-3
         working-directory: mmwave-LENA-oran
