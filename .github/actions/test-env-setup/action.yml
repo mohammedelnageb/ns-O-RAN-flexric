@@ -1,0 +1,71 @@
+# .github/actions/test-env-setup/action.yml
+#
+# Composite action shared by test-kpm-rc and test-es-xapp.
+# Replaces 8 copy-pasted steps (checkout, runtime deps, cmake, python,
+# gcc, artifact download, restore, lib install) with a single call site.
+#
+name: "Test environment setup"
+description: "Installs runtime deps, restores build artifacts, and installs system libraries for xApp integration tests."
+
+runs:
+  using: composite
+  steps:
+    - name: Checkout repository with submodules
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    # Runtime deps only — no build tools (SWIG, asn1c, autoconf, etc.)
+    # needed because we're installing pre-built artifacts.
+    - name: Install system runtime dependencies
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          libsctp-dev libssl-dev libboost-all-dev \
+          libconfig-dev libconfig++-dev sqlite3 libsqlite3-dev \
+          libeigen3-dev \
+          gcc-13 g++-13
+        sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-13 130
+        sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-13 130
+
+    - name: Setup CMake ${{ env.CMAKE_VERSION }}
+      uses: jwlawson/actions-setup-cmake@v2
+      with:
+        cmake-version: ${{ env.CMAKE_VERSION }}
+
+    - name: Set up Python ${{ env.PYTHON_VERSION }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+
+    - name: Download FlexRIC artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: flexric-build
+        path: ${{ github.workspace }}
+
+    - name: Download E2SIM .deb artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: e2sim-deb
+        path: /tmp/e2sim/
+
+    - name: Download ns-3 artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: ns3-build
+        path: ${{ github.workspace }}
+
+    - name: Restore artifacts
+      shell: bash
+      run: |
+        tar -xzf $GITHUB_WORKSPACE/flexric-build.tar.gz -C $GITHUB_WORKSPACE
+        tar -xzf $GITHUB_WORKSPACE/ns3-build.tar.gz     -C $GITHUB_WORKSPACE
+
+    - name: Install E2SIM and FlexRIC system libraries
+      shell: bash
+      run: |
+        sudo dpkg --install /tmp/e2sim/e2sim-dev_1.0.0_amd64.deb
+        sudo cmake --install $GITHUB_WORKSPACE/flexric/build
+        sudo ldconfig
