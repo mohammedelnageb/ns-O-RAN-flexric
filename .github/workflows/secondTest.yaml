@@ -177,6 +177,14 @@ jobs:
       #                               `make install`, derived from cmake's
       #                               install_manifest.txt (shared libs,
       #                               installed headers, cmake config).
+      - name: Verify asn1c headers are available in FlexRIC build
+        run: |
+          echo "Checking for asn1c-generated headers in FlexRIC build..."
+          if [ -d "$GITHUB_WORKSPACE/flexric/build" ]; then
+            find $GITHUB_WORKSPACE/flexric/build -maxdepth 1 -name "E2SM*.h" | head -5 || echo "No E2SM headers found at top level"
+            find $GITHUB_WORKSPACE/flexric/build -name "E2SM*.h" | head -5 || echo "No E2SM headers found anywhere"
+          fi
+
       - name: Package FlexRIC artifact
         run: |
           # Installed-prefix snapshot.
@@ -287,8 +295,27 @@ jobs:
       - name: Inject asn1c-generated headers into ns-3 build include path
         run: |
           NS3_INC="$GITHUB_WORKSPACE/mmwave-LENA-oran/build/include/ns3"
-          find $GITHUB_WORKSPACE/flexric/build -name "*.h" \
-            -exec cp -n {} "$NS3_INC/" \;
+          mkdir -p "$NS3_INC"
+          
+          # Copy asn1c-generated headers from FlexRIC build
+          if [ -d "$GITHUB_WORKSPACE/flexric/build" ]; then
+            find $GITHUB_WORKSPACE/flexric/build -maxdepth 1 -name "*.h" -type f -exec cp {} "$NS3_INC/" \;
+          fi
+          
+          # Also check system installed asn1c headers
+          if [ -d "/opt/asn1c/include" ]; then
+            cp -f /opt/asn1c/include/*.h "$NS3_INC/" 2>/dev/null || true
+          fi
+          
+          # Verify critical headers were copied
+          if [ ! -f "$NS3_INC/E2SM-KPM-RANfunction-Description.h" ]; then
+            echo "WARNING: E2SM-KPM-RANfunction-Description.h not found in expected location"
+            echo "Available headers in $NS3_INC:"
+            ls -la "$NS3_INC/" | head -20
+            echo "---"
+            echo "Searching for the file in flexric:"
+            find $GITHUB_WORKSPACE/flexric -name "E2SM-KPM-RANfunction-Description.h" -type f || true
+          fi
 
       - name: Build ns-3
         working-directory: mmwave-LENA-oran
