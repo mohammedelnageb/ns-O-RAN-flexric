@@ -167,22 +167,18 @@ jobs:
           make -j$(nproc)
           sudo make install && sudo ldconfig
 
-      # Bundle the workspace source/build tree AND the installed system prefix
-      # into one artifact.  asn1c-generated headers (e.g.
-      # E2SM-KPM-RANfunction-Description.h) land in /usr/local/include/flexric/
-      # via `make install`.  build-ns3 runs on a fresh runner and needs those
-      # headers at compile time; restoring the prefix directly is more reliable
-      # than re-running cmake --install from the workspace tree.
+      # Package the FlexRIC artifact.
+      # cmake's install_manifest.txt is the definitive list of every file
+      # that `make install` placed on the system — headers, libs, cmake config,
+      # and all asn1c-generated headers.  Using it avoids hard-coding paths
+      # that vary across FlexRIC versions or cmake prefix settings.
       - name: Package FlexRIC artifact
         run: |
-          # Snapshot the installed prefix relative to / so that extracting
-          # with -C / on the target runner is correct.
-          sudo tar -czf /tmp/flexric-prefix.tar.gz \
-            -C / \
-            usr/local/include/flexric \
-            usr/local/lib/libflexric.so \
-            usr/local/lib/libflexric.a \
-            usr/local/lib/cmake/flexric
+          # Strip leading '/' from each manifest path so tar can be given
+          # relative paths under -C /, which restores them correctly on any runner.
+          MANIFEST=$(cat $GITHUB_WORKSPACE/flexric/build/install_manifest.txt \
+            | sed 's|^/||' | tr '\n' ' ')
+          sudo tar -czf /tmp/flexric-prefix.tar.gz -C / $MANIFEST
 
           # Combine workspace source/build tree with the prefix snapshot.
           tar -czf /tmp/flexric-build.tar.gz \
