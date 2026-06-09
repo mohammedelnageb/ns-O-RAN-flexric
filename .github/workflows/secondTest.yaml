@@ -167,8 +167,27 @@ jobs:
           make -j$(nproc)
           sudo make install && sudo ldconfig
 
+      # Bundle the workspace source/build tree AND the installed system prefix
+      # into one artifact.  asn1c-generated headers (e.g.
+      # E2SM-KPM-RANfunction-Description.h) land in /usr/local/include/flexric/
+      # via `make install`.  build-ns3 runs on a fresh runner and needs those
+      # headers at compile time; restoring the prefix directly is more reliable
+      # than re-running cmake --install from the workspace tree.
       - name: Package FlexRIC artifact
-        run: tar -czf /tmp/flexric-build.tar.gz -C $GITHUB_WORKSPACE flexric/
+        run: |
+          # Snapshot the installed prefix relative to / so that extracting
+          # with -C / on the target runner is correct.
+          sudo tar -czf /tmp/flexric-prefix.tar.gz \
+            -C / \
+            usr/local/include/flexric \
+            usr/local/lib/libflexric.so \
+            usr/local/lib/libflexric.a \
+            usr/local/lib/cmake/flexric
+
+          # Combine workspace source/build tree with the prefix snapshot.
+          tar -czf /tmp/flexric-build.tar.gz \
+            -C $GITHUB_WORKSPACE flexric/ \
+            -C /tmp              flexric-prefix.tar.gz
 
       - name: Upload FlexRIC artifact
         uses: actions/upload-artifact@v4
@@ -217,10 +236,18 @@ jobs:
           name: flexric-build
           path: ${{ github.workspace }}
 
-      - name: Restore and install FlexRIC
+      - name: Restore FlexRIC workspace + installed prefix
         run: |
-          tar -xzf $GITHUB_WORKSPACE/flexric-build.tar.gz -C $GITHUB_WORKSPACE
-          sudo cmake --install $GITHUB_WORKSPACE/flexric/build
+          # 1. Extract the workspace source/build tree.
+          tar -xzf $GITHUB_WORKSPACE/flexric-build.tar.gz \
+            --wildcards 'flexric/*' -C $GITHUB_WORKSPACE
+          # 2. Extract the nested prefix snapshot and restore it to /.
+          #    This puts /usr/local/include/flexric and /usr/local/lib/libflexric*
+          #    back in place, including all asn1c-generated headers that
+          #    ns-3's oran-interface needs at compile time.
+          tar -xzf $GITHUB_WORKSPACE/flexric-build.tar.gz \
+            --wildcards 'flexric-prefix.tar.gz' -C /tmp
+          sudo tar -xzf /tmp/flexric-prefix.tar.gz -C /
           sudo ldconfig
 
       - name: Ensure oran-interface is populated
