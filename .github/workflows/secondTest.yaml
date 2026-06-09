@@ -7,14 +7,11 @@ on:
       - CI/CD_tests
       - main
 
-# ─────────────────────────────────────────────────────────────────────────────
-# SHARED ENV — single source of truth for versions used across all jobs.
-# Change a version here and every job picks it up automatically.
-# ─────────────────────────────────────────────────────────────────────────────
+# Single source of truth for versions — all jobs inherit these.
 env:
-  CMAKE_VERSION: '4.2.1'
+  CMAKE_VERSION:  '4.2.1'
   PYTHON_VERSION: '3.8'
-  ASN1C_COMMIT: '940dd5fa9f3917913fd487b13dfddfacd0ded06e'
+  ASN1C_COMMIT:   '940dd5fa9f3917913fd487b13dfddfacd0ded06e'
   FLEXRIC_COMMIT: 'd3dc645b4'
 
 jobs:
@@ -31,16 +28,13 @@ jobs:
         with:
           submodules: recursive
 
-      # ── Cache apt packages ────────────────────────────────────────────────
-      # Restores /var/cache/apt/archives so apt-get install is a local copy
-      # instead of a network download on cache hit.  Key includes OS release
-      # so a distro upgrade busts the cache automatically.
+      # Cache apt archives — busts only when the package list file changes.
       - name: Cache apt packages
         uses: actions/cache@v4
         with:
           path: /var/cache/apt/archives
-          key: apt-${{ runner.os }}-${{ hashFiles('.github/apt-packages.txt') }}
-          restore-keys: apt-${{ runner.os }}-
+          key: apt-build-${{ runner.os }}-${{ hashFiles('.github/apt-packages-build.txt') }}
+          restore-keys: apt-build-${{ runner.os }}-
 
       - name: Install system dependencies
         run: |
@@ -52,9 +46,6 @@ jobs:
             libconfig-dev libconfig++-dev sqlite3 libsqlite3-dev \
             libeigen3-dev ca-certificates gpg wget m4 \
             gcc-13 g++-13
-
-      - name: Set GCC-13 as default
-        run: |
           sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-13 130
           sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-13 130
 
@@ -68,10 +59,8 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      # ── Cache SWIG (keyed on SWIG release tag) ────────────────────────────
-      # SWIG compilation takes ~3-5 min; cache keyed on the tag avoids
-      # recompiling on every run when the version hasn't changed.
-      - name: Cache SWIG build
+      # Cache SWIG — compiling from source costs ~4 min; skip on cache hit.
+      - name: Cache SWIG 4.1
         id: cache-swig
         uses: actions/cache@v4
         with:
@@ -82,15 +71,14 @@ jobs:
         if: steps.cache-swig.outputs.cache-hit != 'true'
         run: |
           git clone --depth=1 --branch release-4.1 https://github.com/swig/swig.git
-          cd swig
-          ./autogen.sh && ./configure --prefix=/usr/local/swig
+          cd swig && ./autogen.sh && ./configure --prefix=/usr/local/swig
           make -j$(nproc) && sudo make install
 
       - name: Add SWIG to PATH
         run: echo "/usr/local/swig/bin" >> "$GITHUB_PATH"
 
-      # ── Cache asn1c (keyed on commit SHA) ────────────────────────────────
-      - name: Cache asn1c build
+      # Cache asn1c — keyed on commit SHA so a pin change busts it.
+      - name: Cache asn1c
         id: cache-asn1c
         uses: actions/cache@v4
         with:
@@ -108,7 +96,6 @@ jobs:
       - name: Add asn1c to PATH
         run: echo "/opt/asn1c/bin" >> "$GITHUB_PATH"
 
-      # ── E2SIM ─────────────────────────────────────────────────────────────
       - name: Build and install E2SIM
         working-directory: e2sim-kpmv3/e2sim
         run: |
@@ -117,7 +104,6 @@ jobs:
           sudo dpkg --install build/e2sim-dev_1.0.0_amd64.deb
           sudo ldconfig
 
-      # ── FlexRIC ───────────────────────────────────────────────────────────
       - name: Clone and build FlexRIC
         run: |
           git clone https://gitlab.eurecom.fr/mosaic5g/flexric.git
@@ -126,7 +112,6 @@ jobs:
           cmake .. -DE2AP_VERSION=E2AP_V1 -DKPM_VERSION=KPM_V3_00
           make -j$(nproc) && sudo make install && sudo ldconfig
 
-      # ── ns-3 submodule guards ─────────────────────────────────────────────
       - name: Ensure oran-interface is populated
         run: |
           ORAN_DIR="mmwave-LENA-oran/contrib/oran-interface"
@@ -151,14 +136,13 @@ jobs:
           ./ns3 configure
           ./ns3 build -j$(nproc)
 
-      # ── Package & upload (tar preserves executable permissions) ──────────
-      - name: Package and upload FlexRIC artifact
+      - name: Package FlexRIC artifact
         run: tar -czf /tmp/flexric-build.tar.gz -C $GITHUB_WORKSPACE flexric/
 
-      - name: Package and copy E2SIM .deb
+      - name: Package E2SIM .deb artifact
         run: cp e2sim-kpmv3/e2sim/build/e2sim-dev_1.0.0_amd64.deb /tmp/
 
-      - name: Package ns-3 build artifact
+      - name: Package ns-3 artifact
         run: |
           tar -czf /tmp/ns3-build.tar.gz \
             -C $GITHUB_WORKSPACE \
@@ -185,14 +169,6 @@ jobs:
           path: /tmp/ns3-build.tar.gz
 
   # ═══════════════════════════════════════════════════════════════════════════
-  # REUSABLE SETUP — extracted as a composite action (inline below).
-  #
-  # Both test jobs are identical up to the xApp invocation.  Rather than
-  # copy-pasting 8 steps, they call the composite action defined at
-  # .github/actions/test-env-setup/action.yml (see file below).
-  # ═══════════════════════════════════════════════════════════════════════════
-
-  # ═══════════════════════════════════════════════════════════════════════════
   # JOB 2 — KPM/RC xApp Integration Test
   # ═══════════════════════════════════════════════════════════════════════════
   test-kpm-rc:
@@ -201,7 +177,16 @@ jobs:
     needs: build
 
     steps:
-      # Single call replaces the 8 duplicated setup steps.
+      # Checkout MUST be the very first step in the job so the runner can
+      # find the composite action at .github/actions/test-env-setup/.
+      - name: Checkout repository with submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      # All remaining setup (deps, cmake, python, gcc, artifact
+      # download/restore, lib install) lives in the composite action.
+      # Changing setup logic means editing one file, not two jobs.
       - name: Setup test environment
         uses: ./.github/actions/test-env-setup
 
@@ -250,6 +235,11 @@ jobs:
     continue-on-error: true
 
     steps:
+      - name: Checkout repository with submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
       - name: Setup test environment
         uses: ./.github/actions/test-env-setup
 
@@ -276,8 +266,8 @@ jobs:
             || { echo "FAIL: ns-3 died during startup"; tail -20 /tmp/ns3.log; exit 1; }
 
           echo "Starting xApp (30s timeout)..."
-          # Exit codes 124 (timeout) and 137 (SIGKILL after grace) are both success —
-          # the ES xApp is a long-running daemon, not a self-terminating test.
+          # 124 = timeout, 137 = SIGKILL after grace — both mean the daemon
+          # ran successfully and was stopped cleanly; treat as pass.
           timeout --kill-after=5s 30s \
             $GITHUB_WORKSPACE/flexric/build/examples/xApp/c/orange/xapp_es_with_cell_util \
             > /tmp/xapp.log 2>&1 || true
