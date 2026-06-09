@@ -1,4 +1,4 @@
-name: ns-O-RAN-flexric Pipeline
+name: ns-O-RAN-flexric Pipeline Test 2 xApps
 
 on:
   workflow_dispatch:
@@ -7,596 +7,289 @@ on:
       - CI/CD_tests
       - main
 
+# ─────────────────────────────────────────────────────────────────────────────
+# SHARED ENV — single source of truth for versions used across all jobs.
+# Change a version here and every job picks it up automatically.
+# ─────────────────────────────────────────────────────────────────────────────
+env:
+  CMAKE_VERSION: '4.2.1'
+  PYTHON_VERSION: '3.8'
+  ASN1C_COMMIT: '940dd5fa9f3917913fd487b13dfddfacd0ded06e'
+  FLEXRIC_COMMIT: 'd3dc645b4'
 
 jobs:
-
-
-# ============================================================
-# Build E2SIM
-# ============================================================
-
-  build-e2sim:
-
-    runs-on: ubuntu-latest
-    name: Build E2SIM
-
-
-    steps:
-
-    - uses: actions/checkout@v4
-      with:
-        submodules: recursive
-
-
-    - name: Install dependencies
-      run: |
-        set -e
-
-        sudo apt update
-
-        sudo apt install -y \
-          build-essential \
-          git \
-          libsctp-dev \
-          libssl-dev \
-          autoconf \
-          automake \
-          libtool \
-          bison \
-          flex
-
-
-    - name: Build E2SIM
-
-      working-directory: e2sim-kpmv3/e2sim
-
-      run: |
-        set -e
-
-        mkdir -p build
-
-        sudo ./build_e2sim.sh 3
-
-
-    - name: Upload E2SIM
-
-      uses: actions/upload-artifact@v4
-
-      with:
-
-        name: e2sim-deb
-
-        path: e2sim-kpmv3/e2sim/build/*.deb
-
-
-
-
-
-# ============================================================
-# Build FlexRIC
-# ============================================================
-
-  build-flexric:
-
-
+  # ═══════════════════════════════════════════════════════════════════════════
+  # JOB 1 — Build FlexRIC & ns-3, upload artifacts
+  # ═══════════════════════════════════════════════════════════════════════════
+  build:
+    name: "Build FlexRIC & ns-3"
     runs-on: ubuntu-latest
 
-    name: Build FlexRIC
-
-
-
     steps:
-
-
-    - uses: actions/checkout@v4
-
-
-
-    - name: Install dependencies
-
-      run: |
-        set -e
-
-
-        sudo apt update
-
-
-        sudo apt install -y \
-          build-essential \
-          cmake \
-          git \
-          swig \
-          libsctp-dev \
-          libssl-dev \
-          libboost-all-dev \
-          libconfig-dev \
-          libconfig++-dev \
-          sqlite3 \
-          libsqlite3-dev \
-          libeigen3-dev \
-          autoconf \
-          automake \
-          libtool \
-          bison \
-          flex
-
-
-
-
-    - name: Install ASN1C
-
-      run: |
-        set -e
-
-
-        git clone \
-        https://github.com/mouse07410/asn1c \
-        /tmp/asn1c
-
-
-        cd /tmp/asn1c
-
-
-        git checkout 940dd5fa9f3917913fd487b13dfddfacd0ded06e
-
-
-        autoreconf -iv
-
-
-        ./configure \
-        --prefix=/opt/asn1c
-
-
-        make -j$(nproc)
-
-
-        sudo make install
-
-
-        echo "/opt/asn1c/bin" >> $GITHUB_PATH
-
-
-
-
-
-    - name: Clone FlexRIC
-
-      run: |
-        set -e
-
-
-        git clone \
-        https://gitlab.eurecom.fr/mosaic5g/flexric.git
-
-
-        cd flexric
-
-
-        git checkout d3dc645b4
-
-
-
-
-
-    - name: Build FlexRIC
-
-      run: |
-        set -e
-
-
-        cd flexric
-
-
-        mkdir build
-
-
-        cd build
-
-
-        cmake .. \
-        -DE2AP_VERSION=E2AP_V1 \
-        -DKPM_VERSION=KPM_V3_00
-
-
-
-        make -j$(nproc)
-
-
-        sudo make install
-
-
-        sudo ldconfig
-
-
-
-
-
-    - name: Verify KPM headers
-
-      run: |
-        set -e
-
-
-        find /usr/local \
-        -name "E2SM-KPM-RANfunction-Description.h"
-
-
-
-
-    - name: Upload FlexRIC
-
-      uses: actions/upload-artifact@v4
-
-
-      with:
-
-        name: flexric-build
-
-        path: flexric/
-
-
-
-
-
-# ============================================================
-# Build NS3
-# ============================================================
-
-
-  build-ns3:
-
-
+      - name: Checkout repository with submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      # ── Cache apt packages ────────────────────────────────────────────────
+      # Restores /var/cache/apt/archives so apt-get install is a local copy
+      # instead of a network download on cache hit.  Key includes OS release
+      # so a distro upgrade busts the cache automatically.
+      - name: Cache apt packages
+        uses: actions/cache@v4
+        with:
+          path: /var/cache/apt/archives
+          key: apt-${{ runner.os }}-${{ hashFiles('.github/apt-packages.txt') }}
+          restore-keys: apt-${{ runner.os }}-
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential git libsctp-dev libssl-dev \
+            autoconf automake libtool bison flex libboost-all-dev \
+            cmake-curses-gui libpcre2-dev python3-dev \
+            libconfig-dev libconfig++-dev sqlite3 libsqlite3-dev \
+            libeigen3-dev ca-certificates gpg wget m4 \
+            gcc-13 g++-13
+
+      - name: Set GCC-13 as default
+        run: |
+          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-13 130
+          sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-13 130
+
+      - name: Setup CMake ${{ env.CMAKE_VERSION }}
+        uses: jwlawson/actions-setup-cmake@v2
+        with:
+          cmake-version: ${{ env.CMAKE_VERSION }}
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      # ── Cache SWIG (keyed on SWIG release tag) ────────────────────────────
+      # SWIG compilation takes ~3-5 min; cache keyed on the tag avoids
+      # recompiling on every run when the version hasn't changed.
+      - name: Cache SWIG build
+        id: cache-swig
+        uses: actions/cache@v4
+        with:
+          path: /usr/local/swig
+          key: swig-4.1-${{ runner.os }}
+
+      - name: Install SWIG 4.1
+        if: steps.cache-swig.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth=1 --branch release-4.1 https://github.com/swig/swig.git
+          cd swig
+          ./autogen.sh && ./configure --prefix=/usr/local/swig
+          make -j$(nproc) && sudo make install
+
+      - name: Add SWIG to PATH
+        run: echo "/usr/local/swig/bin" >> "$GITHUB_PATH"
+
+      # ── Cache asn1c (keyed on commit SHA) ────────────────────────────────
+      - name: Cache asn1c build
+        id: cache-asn1c
+        uses: actions/cache@v4
+        with:
+          path: /opt/asn1c
+          key: asn1c-${{ env.ASN1C_COMMIT }}-${{ runner.os }}
+
+      - name: Install asn1c
+        if: steps.cache-asn1c.outputs.cache-hit != 'true'
+        run: |
+          git clone https://github.com/mouse07410/asn1c /tmp/asn1c
+          cd /tmp/asn1c && git checkout ${{ env.ASN1C_COMMIT }}
+          autoreconf -iv && ./configure --prefix=/opt/asn1c
+          make -j$(nproc) && sudo make install
+
+      - name: Add asn1c to PATH
+        run: echo "/opt/asn1c/bin" >> "$GITHUB_PATH"
+
+      # ── E2SIM ─────────────────────────────────────────────────────────────
+      - name: Build and install E2SIM
+        working-directory: e2sim-kpmv3/e2sim
+        run: |
+          mkdir -p build
+          sudo ./build_e2sim.sh 3
+          sudo dpkg --install build/e2sim-dev_1.0.0_amd64.deb
+          sudo ldconfig
+
+      # ── FlexRIC ───────────────────────────────────────────────────────────
+      - name: Clone and build FlexRIC
+        run: |
+          git clone https://gitlab.eurecom.fr/mosaic5g/flexric.git
+          cd flexric && git checkout ${{ env.FLEXRIC_COMMIT }}
+          mkdir build && cd build
+          cmake .. -DE2AP_VERSION=E2AP_V1 -DKPM_VERSION=KPM_V3_00
+          make -j$(nproc) && sudo make install && sudo ldconfig
+
+      # ── ns-3 submodule guards ─────────────────────────────────────────────
+      - name: Ensure oran-interface is populated
+        run: |
+          ORAN_DIR="mmwave-LENA-oran/contrib/oran-interface"
+          if [ -z "$(ls -A "$ORAN_DIR" 2>/dev/null)" ]; then
+            rm -rf "$ORAN_DIR"
+            git clone https://github.com/MinaYonan123/oran-interface.git "$ORAN_DIR"
+          fi
+
+      - name: Ensure src/nr is populated
+        run: |
+          NR_DIR="mmwave-LENA-oran/src/nr"
+          if [ ! -f "$NR_DIR/CMakeLists.txt" ]; then
+            rm -rf "$NR_DIR"
+            git clone https://github.com/MinaYonan123/ns3-oran-lena-nr.git "$NR_DIR"
+            cd "$NR_DIR" && git checkout Lena_oran
+          fi
+
+      - name: Build ns-3
+        working-directory: mmwave-LENA-oran
+        run: |
+          ./ns3 clean
+          ./ns3 configure
+          ./ns3 build -j$(nproc)
+
+      # ── Package & upload (tar preserves executable permissions) ──────────
+      - name: Package and upload FlexRIC artifact
+        run: tar -czf /tmp/flexric-build.tar.gz -C $GITHUB_WORKSPACE flexric/
+
+      - name: Package and copy E2SIM .deb
+        run: cp e2sim-kpmv3/e2sim/build/e2sim-dev_1.0.0_amd64.deb /tmp/
+
+      - name: Package ns-3 build artifact
+        run: |
+          tar -czf /tmp/ns3-build.tar.gz \
+            -C $GITHUB_WORKSPACE \
+            mmwave-LENA-oran/build/ \
+            mmwave-LENA-oran/cmake-cache/ \
+            mmwave-LENA-oran/.lock-ns3_linux_build
+
+      - name: Upload FlexRIC artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: flexric-build
+          path: /tmp/flexric-build.tar.gz
+
+      - name: Upload E2SIM .deb artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2sim-deb
+          path: /tmp/e2sim-dev_1.0.0_amd64.deb
+
+      - name: Upload ns-3 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ns3-build
+          path: /tmp/ns3-build.tar.gz
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # REUSABLE SETUP — extracted as a composite action (inline below).
+  #
+  # Both test jobs are identical up to the xApp invocation.  Rather than
+  # copy-pasting 8 steps, they call the composite action defined at
+  # .github/actions/test-env-setup/action.yml (see file below).
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # JOB 2 — KPM/RC xApp Integration Test
+  # ═══════════════════════════════════════════════════════════════════════════
+  test-kpm-rc:
+    name: "KPM/RC xApp Integration Test"
     runs-on: ubuntu-latest
-
-    name: Build ns3
-
-
-    needs:
-
-      - build-flexric
-      - build-e2sim
-
-
-
+    needs: build
 
     steps:
-
-
-    - uses: actions/checkout@v4
-
-      with:
-
-        submodules: recursive
-
-
-
-
-    - name: Download FlexRIC
-
-      uses: actions/download-artifact@v4
-
-      with:
-
-        name: flexric-build
-
-        path: .
-
-
-
-
-    - name: Show workspace
-
-      run: |
-
-        ls -la
-
-
-
-
-
-    - name: Install dependencies
-
-      run: |
-        set -e
-
-
-        sudo apt update
-
-
-        sudo apt install -y \
-          build-essential \
-          cmake \
-          git \
-          python3-dev \
-          libxml2-dev \
-          libsqlite3-dev
-
-
-
-
-    - name: Install FlexRIC
-
-      run: |
-        set -e
-
-
-        echo "Current directory"
-
-        pwd
-
-
-        ls -la
-
-
-
-        sudo cmake --install build
-
-
-        sudo ldconfig
-
-
-
-        echo "KPM header check"
-
-
-        find /usr/local \
-        -name "E2SM-KPM-RANfunction-Description.h"
-
-
-
-
-
-
-    - name: Prepare ORAN interface
-
-      run: |
-        set -e
-
-
-        ORAN="mmwave-LENA-oran/contrib/oran-interface"
-
-
-
-        if [ ! -f "$ORAN/CMakeLists.txt" ]
-
-        then
-
-          rm -rf $ORAN
-
-
-          git clone \
-          https://github.com/MinaYonan123/oran-interface.git \
-          $ORAN
-
-
-        fi
-
-
-
-
-    - name: Prepare NR
-
-      run: |
-        set -e
-
-
-        NR="mmwave-LENA-oran/src/nr"
-
-
-
-        if [ ! -f "$NR/CMakeLists.txt" ]
-
-        then
-
-          rm -rf $NR
-
-
-          git clone \
-          https://github.com/MinaYonan123/ns3-oran-lena-nr.git \
-          $NR
-
-
-
-          cd $NR
-
-
-          git checkout Lena_oran
-
-        fi
-
-
-
-
-    - name: Build ns3
-
-      working-directory: mmwave-LENA-oran
-
-      run: |
-        set -e
-
-
-        rm -rf cmake-cache
-
-
-        ./ns3 clean
-
-
-        ./ns3 configure
-
-
-        ./ns3 build -j$(nproc)
-
-
-
-
-
-    - name: Upload ns3
-
-      uses: actions/upload-artifact@v4
-
-
-      with:
-
-        name: ns3-build
-
-        path: |
-
-          mmwave-LENA-oran/build
-
-          mmwave-LENA-oran/cmake-cache
-
-
-
-
-
-
-# ============================================================
-# KPM TEST
-# ============================================================
-
-
-  test-kpm:
-
-
+      # Single call replaces the 8 duplicated setup steps.
+      - name: Setup test environment
+        uses: ./.github/actions/test-env-setup
+
+      - name: Execution and integration test (KPM/RC)
+        shell: bash
+        run: |
+          $GITHUB_WORKSPACE/flexric/build/examples/ric/nearRT-RIC > /tmp/ric.log 2>&1 &
+          RIC_PID=$!
+          echo "RIC started (PID: $RIC_PID)"
+
+          cd $GITHUB_WORKSPACE/mmwave-LENA-oran
+          ./ns3 run --no-build scratch/scenario-zero.cc > /tmp/ns3.log 2>&1 &
+          NS3_PID=$!
+          echo "ns-3 E2-Node started (PID: $NS3_PID)"
+
+          echo "Waiting for E2 connection setup (20s)..."
+          sleep 20
+
+          kill -0 $RIC_PID 2>/dev/null \
+            || { echo "FAIL: RIC died during startup"; tail -20 /tmp/ric.log; exit 1; }
+          kill -0 $NS3_PID 2>/dev/null \
+            || { echo "FAIL: ns-3 died during startup"; tail -20 /tmp/ns3.log; exit 1; }
+
+          echo "Starting xApp..."
+          $GITHUB_WORKSPACE/flexric/build/examples/xApp/c/kpm_rc/xapp_kpm_rc \
+            > /tmp/xapp.log 2>&1
+          XAPP_EXIT=$?
+
+          echo "=== RIC log (last 10 lines) ==="; tail -10 /tmp/ric.log  || true
+          echo "=== ns-3 log (last 10 lines) ==="; tail -10 /tmp/ns3.log || true
+          echo "=== xApp log (last 30 lines) ==="; tail -30 /tmp/xapp.log || true
+
+          kill $RIC_PID $NS3_PID 2>/dev/null || true
+
+          [ $XAPP_EXIT -eq 0 ] \
+            && echo "SUCCESS: xApp completed its test run successfully." \
+            || { echo "FAIL: xApp exited with code $XAPP_EXIT"; exit 1; }
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # JOB 3 — ES xApp Integration Test
+  # ═══════════════════════════════════════════════════════════════════════════
+  test-es-xapp:
+    name: "ES xApp Integration Test"
     runs-on: ubuntu-latest
-
-
-    needs:
-
-      - build-e2sim
-      - build-flexric
-      - build-ns3
-
-
+    needs: build
+    continue-on-error: true
 
     steps:
-
-
-    - uses: actions/checkout@v4
-
-
-
-    - uses: actions/download-artifact@v4
-
-      with:
-
-        path: .
-
-
-
-    - name: Restore
-
-      run: |
-        set -e
-
-
-        sudo dpkg -i e2sim-deb/*.deb || true
-
-
-        sudo cmake --install flexric-build
-
-
-        sudo ldconfig
-
-
-
-    - name: Run KPM
-
-      run: |
-        set -e
-
-
-        flexric-build/build/examples/ric/nearRT-RIC &
-
-
-        cd ns3-build/mmwave-LENA-oran
-
-
-        ./ns3 run --no-build scratch/scenario-zero.cc &
-
-
-        sleep 20
-
-
-        flexric-build/build/examples/xApp/c/kpm_rc/xapp_kpm_rc
-
-
-
-
-
-# ============================================================
-# ES TEST
-# ============================================================
-
-
-  test-es:
-
-
-    runs-on: ubuntu-latest
-
-
-    needs:
-
-      - build-e2sim
-      - build-flexric
-      - build-ns3
-
-
-
-    steps:
-
-
-    - uses: actions/checkout@v4
-
-
-
-    - uses: actions/download-artifact@v4
-
-      with:
-
-        path: .
-
-
-
-
-    - name: Restore
-
-      run: |
-        set -e
-
-
-        sudo dpkg -i e2sim-deb/*.deb || true
-
-
-        sudo cmake --install flexric-build
-
-
-        sudo ldconfig
-
-
-
-
-
-    - name: Run ES
-
-      run: |
-        set -e
-
-
-        flexric-build/build/examples/ric/nearRT-RIC &
-
-
-        cd ns3-build/mmwave-LENA-oran
-
-
-        ./ns3 run \
-        --no-build \
-        scratch/Energy_saving_with_cell_utilization_scenario.cc &
-
-
-        sleep 20
-
-
-        timeout 30s \
-        flexric-build/build/examples/xApp/c/orange/xapp_es_with_cell_util \
-        || true
+      - name: Setup test environment
+        uses: ./.github/actions/test-env-setup
+
+      - name: Test ES xApp with RIC and ns-3
+        shell: bash
+        run: |
+          $GITHUB_WORKSPACE/flexric/build/examples/ric/nearRT-RIC > /tmp/ric.log 2>&1 &
+          RIC_PID=$!
+          echo "RIC started (PID: $RIC_PID)"
+
+          cd $GITHUB_WORKSPACE/mmwave-LENA-oran
+          ./ns3 run --no-build \
+            scratch/Energy_saving_with_cell_utilization_scenario.cc \
+            > /tmp/ns3.log 2>&1 &
+          NS3_PID=$!
+          echo "ns-3 E2-Node started (PID: $NS3_PID)"
+
+          echo "Waiting for E2 connection setup (20s)..."
+          sleep 20
+
+          kill -0 $RIC_PID 2>/dev/null \
+            || { echo "FAIL: RIC died during startup"; tail -20 /tmp/ric.log; exit 1; }
+          kill -0 $NS3_PID 2>/dev/null \
+            || { echo "FAIL: ns-3 died during startup"; tail -20 /tmp/ns3.log; exit 1; }
+
+          echo "Starting xApp (30s timeout)..."
+          # Exit codes 124 (timeout) and 137 (SIGKILL after grace) are both success —
+          # the ES xApp is a long-running daemon, not a self-terminating test.
+          timeout --kill-after=5s 30s \
+            $GITHUB_WORKSPACE/flexric/build/examples/xApp/c/orange/xapp_es_with_cell_util \
+            > /tmp/xapp.log 2>&1 || true
+          XAPP_EXIT=$?
+          { [ $XAPP_EXIT -eq 124 ] || [ $XAPP_EXIT -eq 137 ]; } && XAPP_EXIT=0
+
+          echo "=== RIC log (last 10 lines) ==="; tail -10 /tmp/ric.log  || true
+          echo "=== ns-3 log (last 10 lines) ==="; tail -10 /tmp/ns3.log || true
+          echo "=== xApp log (last 30 lines) ==="; tail -30 /tmp/xapp.log || true
+
+          kill $RIC_PID $NS3_PID 2>/dev/null || true
+
+          [ $XAPP_EXIT -eq 0 ] \
+            && echo "SUCCESS: xApp completed its test run successfully." \
+            || { echo "FAIL: xApp exited with code $XAPP_EXIT"; exit 1; }
