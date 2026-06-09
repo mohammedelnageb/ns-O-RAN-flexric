@@ -7,7 +7,6 @@ on:
       - CI/CD_tests
       - main
 
-# Single source of truth for versions — all jobs inherit these.
 env:
   CMAKE_VERSION:  '4.2.1'
   PYTHON_VERSION: '3.8'
@@ -16,36 +15,123 @@ env:
 
 jobs:
   # ═══════════════════════════════════════════════════════════════════════════
-  # JOB 1 — Build FlexRIC & ns-3, upload artifacts
+  # JOB 1a — Build SWIG + asn1c  ┐
+  # JOB 1b — Build E2SIM          ├─ all three run in parallel
+  # (no shared deps between them) ┘
   # ═══════════════════════════════════════════════════════════════════════════
-  build:
-    name: "Build FlexRIC & ns-3"
-    runs-on: ubuntu-latest
 
+  build-tools:
+    name: "Build SWIG + asn1c"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install build prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential autoconf automake libtool bison flex \
+            libpcre2-dev ca-certificates wget
+
+      # ── SWIG ──────────────────────────────────────────────────────────────
+      - name: Cache SWIG 4.1
+        id: cache-swig
+        uses: actions/cache@v4
+        with:
+          path: /usr/local/swig
+          key: swig-4.1-${{ runner.os }}
+
+      - name: Build SWIG 4.1
+        if: steps.cache-swig.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth=1 --branch release-4.1 https://github.com/swig/swig.git
+          cd swig && ./autogen.sh && ./configure --prefix=/usr/local/swig
+          make -j$(nproc) && sudo make install
+
+      # ── asn1c ─────────────────────────────────────────────────────────────
+      - name: Cache asn1c
+        id: cache-asn1c
+        uses: actions/cache@v4
+        with:
+          path: /opt/asn1c
+          key: asn1c-${{ env.ASN1C_COMMIT }}-${{ runner.os }}
+
+      - name: Build asn1c
+        if: steps.cache-asn1c.outputs.cache-hit != 'true'
+        run: |
+          git clone https://github.com/mouse07410/asn1c /tmp/asn1c
+          cd /tmp/asn1c && git checkout ${{ env.ASN1C_COMMIT }}
+          autoreconf -iv && ./configure --prefix=/opt/asn1c
+          make -j$(nproc) && sudo make install
+
+      # Package both tools into one artifact so build-flexric can restore them.
+      # On a cache hit the dirs already exist; tar still runs fast since they
+      # are small (~30 MB combined).
+      - name: Package tools artifact
+        run: |
+          tar -czf /tmp/build-tools.tar.gz \
+            /usr/local/swig \
+            /opt/asn1c
+
+      - name: Upload tools artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-tools
+          path: /tmp/build-tools.tar.gz
+
+  # ─────────────────────────────────────────────────────────────────────────
+
+  build-e2sim:
+    name: "Build E2SIM"
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout repository with submodules
         uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      # Cache apt archives — busts only when the package list file changes.
-      - name: Cache apt packages
-        uses: actions/cache@v4
-        with:
-          path: /var/cache/apt/archives
-          key: apt-build-${{ runner.os }}-${{ hashFiles('.github/apt-packages-build.txt') }}
-          restore-keys: apt-build-${{ runner.os }}-
+      - name: Install E2SIM build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential libsctp-dev libssl-dev cmake \
+            libboost-all-dev gcc-13 g++-13
+          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-13 130
+          sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-13 130
 
-      - name: Install system dependencies
+      - name: Build E2SIM and package .deb
+        working-directory: e2sim-kpmv3/e2sim
+        run: |
+          mkdir -p build
+          sudo ./build_e2sim.sh 3
+
+      - name: Upload E2SIM .deb artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2sim-deb
+          path: e2sim-kpmv3/e2sim/build/e2sim-dev_1.0.0_amd64.deb
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # JOB 2 — Build FlexRIC
+  # Waits only on build-tools (needs SWIG + asn1c on PATH).
+  # Does NOT wait on build-e2sim — the .deb is only needed at test-run time.
+  # ═══════════════════════════════════════════════════════════════════════════
+  build-flexric:
+    name: "Build FlexRIC"
+    runs-on: ubuntu-latest
+    needs: build-tools
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install FlexRIC build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             build-essential git libsctp-dev libssl-dev \
-            autoconf automake libtool bison flex libboost-all-dev \
-            cmake-curses-gui libpcre2-dev python3-dev \
             libconfig-dev libconfig++-dev sqlite3 libsqlite3-dev \
-            libeigen3-dev ca-certificates gpg wget m4 \
-            gcc-13 g++-13
+            libeigen3-dev cmake gcc-13 g++-13
           sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-13 130
           sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-13 130
 
@@ -59,49 +145,17 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      # Cache SWIG — compiling from source costs ~4 min; skip on cache hit.
-      - name: Cache SWIG 4.1
-        id: cache-swig
-        uses: actions/cache@v4
+      - name: Download tools artifact
+        uses: actions/download-artifact@v4
         with:
-          path: /usr/local/swig
-          key: swig-4.1-${{ runner.os }}
+          name: build-tools
+          path: /tmp
 
-      - name: Install SWIG 4.1
-        if: steps.cache-swig.outputs.cache-hit != 'true'
+      - name: Restore SWIG + asn1c
         run: |
-          git clone --depth=1 --branch release-4.1 https://github.com/swig/swig.git
-          cd swig && ./autogen.sh && ./configure --prefix=/usr/local/swig
-          make -j$(nproc) && sudo make install
-
-      - name: Add SWIG to PATH
-        run: echo "/usr/local/swig/bin" >> "$GITHUB_PATH"
-
-      # Cache asn1c — keyed on commit SHA so a pin change busts it.
-      - name: Cache asn1c
-        id: cache-asn1c
-        uses: actions/cache@v4
-        with:
-          path: /opt/asn1c
-          key: asn1c-${{ env.ASN1C_COMMIT }}-${{ runner.os }}
-
-      - name: Install asn1c
-        if: steps.cache-asn1c.outputs.cache-hit != 'true'
-        run: |
-          git clone https://github.com/mouse07410/asn1c /tmp/asn1c
-          cd /tmp/asn1c && git checkout ${{ env.ASN1C_COMMIT }}
-          autoreconf -iv && ./configure --prefix=/opt/asn1c
-          make -j$(nproc) && sudo make install
-
-      - name: Add asn1c to PATH
-        run: echo "/opt/asn1c/bin" >> "$GITHUB_PATH"
-
-      - name: Build and install E2SIM
-        working-directory: e2sim-kpmv3/e2sim
-        run: |
-          mkdir -p build
-          sudo ./build_e2sim.sh 3
-          sudo dpkg --install build/e2sim-dev_1.0.0_amd64.deb
+          sudo tar -xzf /tmp/build-tools.tar.gz -C /
+          echo "/usr/local/swig/bin" >> "$GITHUB_PATH"
+          echo "/opt/asn1c/bin"      >> "$GITHUB_PATH"
           sudo ldconfig
 
       - name: Clone and build FlexRIC
@@ -110,7 +164,64 @@ jobs:
           cd flexric && git checkout ${{ env.FLEXRIC_COMMIT }}
           mkdir build && cd build
           cmake .. -DE2AP_VERSION=E2AP_V1 -DKPM_VERSION=KPM_V3_00
-          make -j$(nproc) && sudo make install && sudo ldconfig
+          make -j$(nproc)
+          sudo make install && sudo ldconfig
+
+      - name: Package FlexRIC artifact
+        run: tar -czf /tmp/flexric-build.tar.gz -C $GITHUB_WORKSPACE flexric/
+
+      - name: Upload FlexRIC artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: flexric-build
+          path: /tmp/flexric-build.tar.gz
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # JOB 3 — Build ns-3
+  # Waits on build-flexric because oran-interface links against libflexric.
+  # ═══════════════════════════════════════════════════════════════════════════
+  build-ns3:
+    name: "Build ns-3"
+    runs-on: ubuntu-latest
+    needs: build-flexric
+    steps:
+      - name: Checkout repository with submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install ns-3 build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential libsctp-dev libssl-dev \
+            libboost-all-dev libconfig-dev libconfig++-dev \
+            sqlite3 libsqlite3-dev libeigen3-dev \
+            python3-dev gcc-13 g++-13
+          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-13 130
+          sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-13 130
+
+      - name: Setup CMake ${{ env.CMAKE_VERSION }}
+        uses: jwlawson/actions-setup-cmake@v2
+        with:
+          cmake-version: ${{ env.CMAKE_VERSION }}
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Download FlexRIC artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: flexric-build
+          path: ${{ github.workspace }}
+
+      - name: Restore and install FlexRIC
+        run: |
+          tar -xzf $GITHUB_WORKSPACE/flexric-build.tar.gz -C $GITHUB_WORKSPACE
+          sudo cmake --install $GITHUB_WORKSPACE/flexric/build
+          sudo ldconfig
 
       - name: Ensure oran-interface is populated
         run: |
@@ -136,12 +247,6 @@ jobs:
           ./ns3 configure
           ./ns3 build -j$(nproc)
 
-      - name: Package FlexRIC artifact
-        run: tar -czf /tmp/flexric-build.tar.gz -C $GITHUB_WORKSPACE flexric/
-
-      - name: Package E2SIM .deb artifact
-        run: cp e2sim-kpmv3/e2sim/build/e2sim-dev_1.0.0_amd64.deb /tmp/
-
       - name: Package ns-3 artifact
         run: |
           tar -czf /tmp/ns3-build.tar.gz \
@@ -150,18 +255,6 @@ jobs:
             mmwave-LENA-oran/cmake-cache/ \
             mmwave-LENA-oran/.lock-ns3_linux_build
 
-      - name: Upload FlexRIC artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: flexric-build
-          path: /tmp/flexric-build.tar.gz
-
-      - name: Upload E2SIM .deb artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: e2sim-deb
-          path: /tmp/e2sim-dev_1.0.0_amd64.deb
-
       - name: Upload ns-3 artifact
         uses: actions/upload-artifact@v4
         with:
@@ -169,24 +262,19 @@ jobs:
           path: /tmp/ns3-build.tar.gz
 
   # ═══════════════════════════════════════════════════════════════════════════
-  # JOB 2 — KPM/RC xApp Integration Test
+  # JOB 4 — KPM/RC xApp Integration Test
   # ═══════════════════════════════════════════════════════════════════════════
   test-kpm-rc:
     name: "KPM/RC xApp Integration Test"
     runs-on: ubuntu-latest
-    needs: build
+    needs: [build-ns3, build-e2sim]
 
     steps:
-      # Checkout MUST be the very first step in the job so the runner can
-      # find the composite action at .github/actions/test-env-setup/.
       - name: Checkout repository with submodules
         uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      # All remaining setup (deps, cmake, python, gcc, artifact
-      # download/restore, lib install) lives in the composite action.
-      # Changing setup logic means editing one file, not two jobs.
       - name: Setup test environment
         uses: ./.github/actions/test-env-setup
 
@@ -226,12 +314,12 @@ jobs:
             || { echo "FAIL: xApp exited with code $XAPP_EXIT"; exit 1; }
 
   # ═══════════════════════════════════════════════════════════════════════════
-  # JOB 3 — ES xApp Integration Test
+  # JOB 5 — ES xApp Integration Test
   # ═══════════════════════════════════════════════════════════════════════════
   test-es-xapp:
     name: "ES xApp Integration Test"
     runs-on: ubuntu-latest
-    needs: build
+    needs: [build-ns3, build-e2sim]
     continue-on-error: true
 
     steps:
@@ -266,8 +354,6 @@ jobs:
             || { echo "FAIL: ns-3 died during startup"; tail -20 /tmp/ns3.log; exit 1; }
 
           echo "Starting xApp (30s timeout)..."
-          # 124 = timeout, 137 = SIGKILL after grace — both mean the daemon
-          # ran successfully and was stopped cleanly; treat as pass.
           timeout --kill-after=5s 30s \
             $GITHUB_WORKSPACE/flexric/build/examples/xApp/c/orange/xapp_es_with_cell_util \
             > /tmp/xapp.log 2>&1 || true
